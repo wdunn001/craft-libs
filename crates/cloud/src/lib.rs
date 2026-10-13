@@ -7,20 +7,23 @@
 //! they are small. So there is no reason for an app to know which server it is
 //! talking to, and no reason to write the same logic again for the next one.
 //!
-//! Three rules hold this together.
-//!
 //! Nothing in this crate opens a socket. Each trait is implemented by a
 //! provider crate that brings its own transport, which keeps this testable
 //! with no server and keeps the contracts honest about what they need.
 //!
 //! No type here names a vendor. If a field only makes sense for one product,
-//! it belongs in that provider's crate, not in this one.
+//! it belongs in that provider's crate.
 //!
-//! Apps never implement these traits and never call a provider directly. They
-//! talk to the CollabCraft service, which is the single place a provider is
-//! configured, credentials are held and permissions are decided. A desktop
-//! binary holding a provider credential is exactly what this design exists to
-//! prevent.
+//! Nothing here says where an implementation runs. A local adapter may
+//! implement these traits against a provider directly, and an application may
+//! consume them that way. The contracts do not care.
+//!
+//! CollabCraft chooses otherwise for its own apps. They reach one service, and
+//! that service is the single place a provider is configured, a credential is
+//! held and a permission is decided. A desktop binary carrying a provider
+//! credential leaks one the moment somebody copies the file, which is what
+//! that arrangement exists to prevent. It is a deployment policy, and this
+//! crate imposes it on nobody.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
