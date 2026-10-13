@@ -958,9 +958,14 @@ fn permission_menu(ui: &mut Ui, sheet: &mut Sheet, labels: &ShareLabels) {
         Permission::Edit => labels.can_edit.as_str(),
         Permission::View => labels.can_view.as_str(),
     };
-    // A chevron, so it reads as something that opens rather than a label that
-    // happens to be clickable.
-    let button = ui.button(format!("{current}  \u{25be}"));
+    // A triangle, so it reads as something that opens. Painted rather than
+    // typed: the character is missing from the default font set, where it
+    // renders as a box.
+    let button = ui.button(format!("{current}    "));
+    crate::buttons::chevron(ui, button.rect, ui.visuals().text_color());
+    // The padding makes room for the triangle. It is layout, so it must not
+    // reach anybody reading the screen aloud.
+    button.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, current));
     egui::Popup::menu(&button).show(|ui| {
         ui.set_min_width(190.0);
         for (value, name, detail) in [
@@ -1130,7 +1135,8 @@ fn describe(failure: &Failure) -> String {
 }
 
 fn access(ui: &mut Ui, sheet: &Sheet, labels: &ShareLabels, weak: Color32, acts: &mut Vec<Act>) {
-    ui.label(RichText::new(labels.access.as_str()).strong());
+    // The header above already names this list. Naming it twice reads as
+    // two headings for one thing.
     let Some(list) = &sheet.access else {
         ui.label(RichText::new(labels.loading.as_str()).color(weak));
         return;
@@ -1195,7 +1201,9 @@ fn chip(ui: &mut Ui, avatars: &HashMap<String, Avatar>, chosen: &Chosen, labels:
             ui.add_space(3.0);
             picture(ui, avatars, chosen.avatar.as_deref(), &chosen.label, acts);
             ui.label(chosen.label.as_str());
-            ui.label(RichText::new("✕").color(ui.visuals().weak_text_color()));
+            // The same cross the dialog closes with. U+2715 is absent from
+            // the default font set, where it renders as a box.
+            ui.label(RichText::new("×").color(ui.visuals().weak_text_color()));
             ui.add_space(1.0);
         });
     });

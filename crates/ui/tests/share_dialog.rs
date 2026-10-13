@@ -233,7 +233,7 @@ fn text(output: &FullOutput) -> Vec<String> {
 const SEND: &str = "Send";
 
 /// The permission dropdown, chevron included. It is a menu, not a toggle.
-const PERMISSION: &str = "View  ▾";
+const PERMISSION: &str = "View";
 
 fn says(output: &FullOutput, fragment: &str) -> bool {
     text(output).iter().any(|line| line.contains(fragment))
