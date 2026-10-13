@@ -89,11 +89,7 @@ impl LoginFlow {
         }
 
         let v = json(&resp.body)?;
-        Ok(Some(AppPassword {
-            server: string(&v, "server")?,
-            user: string(&v, "loginName")?,
-            password: string(&v, "appPassword")?,
-        }))
+        Ok(Some(AppPassword { server: string(&v, "server")?, user: string(&v, "loginName")?, password: string(&v, "appPassword")? }))
     }
 }
 
@@ -102,10 +98,7 @@ fn json(body: &[u8]) -> Result<serde_json::Value> {
 }
 
 fn string(v: &serde_json::Value, key: &'static str) -> Result<String> {
-    v.get(key)
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| Error::malformed("login flow", format!("no {key}")))
+    v.get(key).and_then(serde_json::Value::as_str).map(str::to_owned).ok_or_else(|| Error::malformed("login flow", format!("no {key}")))
 }
 
 /// Mint a CraftCollab relay token for one file.

@@ -111,10 +111,7 @@ impl<'a> Files<'a> {
             .body(PROPFIND_BODY.as_bytes().to_vec());
         let resp = send(http, req)?;
 
-        let group = xml::groups(&resp.body, "response")?
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::malformed("propfind", "no response element"))?;
+        let group = xml::groups(&resp.body, "response")?.into_iter().next().ok_or_else(|| Error::malformed("propfind", "no response element"))?;
         let href = group.get("href").ok_or_else(|| Error::malformed("propfind", "no href"))?.to_owned();
         Ok(entry_from(&group, &href, &self.account.files_root()))
     }

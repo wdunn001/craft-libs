@@ -10,8 +10,8 @@
 //! surface, which is what an application actually holds.
 
 use craft_cloud::{
-    Capability, Contact as CloudContact, Entry as CloudEntry, EntryKind, Error as CloudError, Identity,
-    MailMessage, Notification, Permission, Result as CloudResult, Share as CloudShare, ShareOptions, ShareTarget,
+    Capability, Contact as CloudContact, Entry as CloudEntry, EntryKind, Error as CloudError, Identity, MailMessage, Notification, Permission,
+    Result as CloudResult, Share as CloudShare, ShareOptions, ShareTarget,
 };
 
 use crate::http::{Http, Method};
@@ -60,16 +60,11 @@ fn lift(e: Error) -> CloudError {
         Error::Status { status: 403, body, .. } => CloudError::Forbidden(reason(&body, "refused")),
         Error::Status { status: 404, body, .. } => CloudError::not_found("entry", reason(&body, "no such entry")),
         Error::Status { status: 409 | 412, body, .. } => CloudError::Conflict(reason(&body, "changed since you opened it")),
-        Error::Status { method, path, status, .. } => {
-            CloudError::Unreachable(format!("{method} {path} returned HTTP {status}"))
-        }
+        Error::Status { method, path, status, .. } => CloudError::Unreachable(format!("{method} {path} returned HTTP {status}")),
         // OCS answers HTTP 200 and reports the real outcome in its own
         // envelope, so these codes are the only signal there is.
         Error::Ocs { code: 403 | 404, message } => CloudError::Forbidden(message),
-        Error::Ocs { code, message } => CloudError::Malformed {
-            what: "ocs",
-            detail: format!("statuscode {code}: {message}"),
-        },
+        Error::Ocs { code, message } => CloudError::Malformed { what: "ocs", detail: format!("statuscode {code}: {message}") },
         Error::Malformed { what, detail } => CloudError::Malformed { what, detail },
         Error::Invalid { what, detail } => CloudError::Invalid { what, detail },
     }
@@ -149,11 +144,7 @@ impl<H: Http> craft_cloud::Files for Nextcloud<H> {
                 mime: g.get("mimetype").filter(|v| !v.is_empty()).map(str::to_owned),
                 etag: None,
                 writable: permissions.contains(Permissions::UPDATE),
-                shared_by: g
-                    .get("displayname_owner")
-                    .or_else(|| g.get("uid_owner"))
-                    .filter(|v| !v.is_empty())
-                    .map(str::to_owned),
+                shared_by: g.get("displayname_owner").or_else(|| g.get("uid_owner")).filter(|v| !v.is_empty()).map(str::to_owned),
             });
         }
         Ok(out)
@@ -271,14 +262,11 @@ impl<H: Http> craft_cloud::Contacts for Nextcloud<H> {
             // An account won already. Adding the address book's copy would
             // offer the same person twice, with the worse of the two shares
             // second.
-            let known = out.iter().any(|existing| {
-                existing.id == id || existing.email.as_deref().is_some_and(|e| c.emails.iter().any(|a| a == e))
-            });
+            let known = out.iter().any(|existing| existing.id == id || existing.email.as_deref().is_some_and(|e| c.emails.iter().any(|a| a == e)));
             if known {
                 continue;
             }
-            let target =
-                if c.user_id.is_empty() { ShareTarget::Email(id.clone()) } else { ShareTarget::User(id.clone()) };
+            let target = if c.user_id.is_empty() { ShareTarget::Email(id.clone()) } else { ShareTarget::User(id.clone()) };
             out.push(CloudContact {
                 id,
                 target,
@@ -315,8 +303,7 @@ impl<H: Http> Nextcloud<H> {
         // meaning.
         let req = self.account.request(Method::Get, url).header("accept", "application/json");
         let resp = send(&self.http, req).map_err(lift)?;
-        let body: serde_json::Value =
-            serde_json::from_slice(&resp.body).map_err(|e| CloudError::malformed("sharees", e.to_string()))?;
+        let body: serde_json::Value = serde_json::from_slice(&resp.body).map_err(|e| CloudError::malformed("sharees", e.to_string()))?;
         let data = body.pointer("/ocs/data").ok_or_else(|| CloudError::malformed("sharees", "no ocs data"))?;
 
         let mut out = Vec::new();
@@ -367,14 +354,7 @@ fn collect_sharees(rows: &serde_json::Value, out: &mut Vec<CloudContact>, limit:
         } else {
             value.get("shareWithAdditionalInfo").and_then(serde_json::Value::as_str).map(str::to_owned)
         };
-        out.push(CloudContact {
-            id: share_with.to_owned(),
-            target,
-            name: label.to_owned(),
-            email,
-            avatar: None,
-            is_group: kind == SHARE_TYPE_GROUP,
-        });
+        out.push(CloudContact { id: share_with.to_owned(), target, name: label.to_owned(), email, avatar: None, is_group: kind == SHARE_TYPE_GROUP });
     }
 }
 
@@ -389,11 +369,7 @@ impl<H: Http> craft_cloud::Notifications for Nextcloud<H> {
             crate::encode_segment(&notification.subject),
             crate::encode_segment(notification.body.as_deref().unwrap_or("")),
         );
-        let req = self
-            .account
-            .request(Method::Post, url)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(body.into_bytes());
+        let req = self.account.request(Method::Post, url).header("content-type", "application/x-www-form-urlencoded").body(body.into_bytes());
         send(&self.http, req).map_err(lift)?;
         Ok(())
     }
@@ -453,12 +429,7 @@ impl<H: Http> Nextcloud<H> {
                     out.push(Capability::LinkPasswordRequired);
                 }
             }
-            if public
-                .and_then(|p| p.get("expire_date"))
-                .and_then(|e| e.get("enabled"))
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-            {
+            if public.and_then(|p| p.get("expire_date")).and_then(|e| e.get("enabled")).and_then(serde_json::Value::as_bool).unwrap_or(false) {
                 out.push(Capability::ShareExpiry);
             }
         }
