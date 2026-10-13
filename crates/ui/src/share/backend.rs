@@ -171,10 +171,10 @@ pub trait ShareBackend {
     fn submit(&self, request: Request, reply: Replier);
 }
 
-#[cfg(feature = "collabcraft")]
+#[cfg(all(feature = "collabcraft", not(target_arch = "wasm32")))]
 pub use collabcraft::CollabCraft;
 
-#[cfg(feature = "collabcraft")]
+#[cfg(all(feature = "collabcraft", not(target_arch = "wasm32")))]
 mod collabcraft {
     use std::sync::Arc;
 

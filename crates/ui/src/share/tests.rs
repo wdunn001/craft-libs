@@ -119,7 +119,7 @@ fn opening_asks_who_already_has_access() {
 }
 
 #[test]
-fn an_unsaved_document_asks_nothing_and_says_so() {
+fn an_unsaved_document_asks_where_it_could_go_and_never_about_a_handle() {
     let ctx = Context::default();
     let backend = Silent::default();
     let mut dialog = ShareDialog::new();
@@ -128,7 +128,10 @@ fn an_unsaved_document_asks_nothing_and_says_so() {
     dialog.receive(&ctx, 1, Ok(everything()));
     dialog.open("", "Book1");
     assert!(dialog.is_open());
-    assert_eq!(backend.seen(), vec![Request::Capabilities], "there is no handle to ask about");
+    // Sharing an unsaved document means saving it first. The dialog therefore
+    // needs somewhere to offer. It asks nothing about a handle. There is none.
+    assert_eq!(backend.seen(), vec![Request::Capabilities, Request::Destinations]);
+    assert!(!backend.seen().iter().any(|r| matches!(r, Request::Access { .. })), "there is no handle to ask about");
 }
 
 #[test]
@@ -159,14 +162,17 @@ fn several_recipients_can_be_picked_and_each_only_once() {
     for contact in [person("ann", "Ann Reed"), person("bob", "Bob Vine"), person("ann", "Ann Reed")] {
         choose(sheet, &contact);
     }
-    choose(sheet, &Contact {
-        id: "finance".into(),
-        target: ShareTarget::Group("finance".into()),
-        name: "Finance".into(),
-        email: None,
-        avatar: None,
-        is_group: true,
-    });
+    choose(
+        sheet,
+        &Contact {
+            id: "finance".into(),
+            target: ShareTarget::Group("finance".into()),
+            name: "Finance".into(),
+            email: None,
+            avatar: None,
+            is_group: true,
+        },
+    );
 
     let picked: Vec<&ShareTarget> = sheet.chosen.iter().map(|c| &c.target).collect();
     assert_eq!(

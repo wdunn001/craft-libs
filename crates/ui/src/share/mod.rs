@@ -34,7 +34,7 @@ mod backend;
 #[cfg(test)]
 mod tests;
 
-#[cfg(feature = "collabcraft")]
+#[cfg(all(feature = "collabcraft", not(target_arch = "wasm32")))]
 pub use backend::CollabCraft;
 pub use backend::{Answer, Destination, Failure, Grant, Replier, Request, ShareBackend};
 
@@ -155,8 +155,8 @@ impl Default for ShareLabels {
             message_hint: "Add a message".into(),
             send: "Send".into(),
             manage_access: "Who has access".into(),
-            upload_first: "Save this workbook somewhere to share it.".into(),
-            name_hint: "Name this workbook".into(),
+            upload_first: "Save this document somewhere to share it.".into(),
+            name_hint: "Name this document".into(),
             saving: "Saving\u{2026}".into(),
             save_and_share: "Save and share".into(),
             sign_in: "Sign in".into(),
@@ -283,7 +283,10 @@ impl Sheet {
 enum Act {
     Lookup(String),
     /// Save a document that has nowhere to live yet, into one destination.
-    SaveAs { destination: String, name: String },
+    SaveAs {
+        destination: String,
+        name: String,
+    },
     /// Connect an account for a destination that has none.
     Link(String),
     Grant(Grant),
@@ -501,13 +504,7 @@ impl ShareDialog {
 
     fn contents(&mut self, ui: &mut Ui) {
         let allowed = match self.provider {
-            Some(p) => Allowed {
-                contacts: p.contacts,
-                mail: p.mail,
-                links: p.links,
-                key: p.key,
-                key_required: p.key_required,
-            },
+            Some(p) => Allowed { contacts: p.contacts, mail: p.mail, links: p.links, key: p.key, key_required: p.key_required },
             None => Allowed { contacts: false, mail: false, links: false, key: false, key_required: false },
         };
         let mut acts = Vec::new();
@@ -807,12 +804,7 @@ fn draw(ui: &mut Ui, sheet: &mut Sheet, avatars: &HashMap<String, Avatar>, label
     if allowed.links {
         ui.horizontal(|ui| {
             if allowed.key {
-                ui.add(
-                    egui::TextEdit::singleline(&mut sheet.link_key)
-                        .hint_text(labels.key_hint.as_str())
-                        .password(true)
-                        .desired_width(150.0),
-                );
+                ui.add(egui::TextEdit::singleline(&mut sheet.link_key).hint_text(labels.key_hint.as_str()).password(true).desired_width(150.0));
             }
             // A key the server insists on cannot be skipped, so the control
             // stays disabled until one is typed.
@@ -842,17 +834,14 @@ fn draw(ui: &mut Ui, sheet: &mut Sheet, avatars: &HashMap<String, Avatar>, label
             // Reported, never assumed. A server with no mail is said to have
             // none, instead of being given a box that quietly does nothing.
             sheet.notify = false;
-            ui.add_enabled(false, egui::Checkbox::new(&mut sheet.notify, labels.notify.as_str()))
-                .on_disabled_hover_text(labels.no_mail.as_str());
+            ui.add_enabled(false, egui::Checkbox::new(&mut sheet.notify, labels.notify.as_str())).on_disabled_hover_text(labels.no_mail.as_str());
         }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             let busy = sheet.granting.is_some();
             let ready = !sheet.chosen.is_empty() && !busy;
             let label = if busy { labels.sharing.clone() } else { labels.send.clone() };
-            let send = egui::Button::new(RichText::new(label).strong())
-                .fill(ui.visuals().selection.bg_fill)
-                .min_size(egui::vec2(88.0, 26.0));
+            let send = egui::Button::new(RichText::new(label).strong()).fill(ui.visuals().selection.bg_fill).min_size(egui::vec2(88.0, 26.0));
             if ui.add_enabled(ready, send).clicked() {
                 acts.push(Act::Grant(Grant {
                     id: sheet.id.clone(),
@@ -871,11 +860,12 @@ fn draw(ui: &mut Ui, sheet: &mut Sheet, avatars: &HashMap<String, Avatar>, label
 
     outcome(ui, sheet, labels, danger);
 
-    // Existing access, folded away. Worth having, and not what somebody opened
-    // this dialog to do.
+    // Who already holds the document, open. Folding it hid the one fact
+    // a person needs before adding anybody else. It still folds on request.
     ui.add_space(4.0);
     egui::CollapsingHeader::new(RichText::new(labels.manage_access.as_str()).color(weak))
-        .id_salt("collabcraft_access")
+        .id_salt("craft-ui/share/manage-access")
+        .default_open(true)
         .show(ui, |ui| {
             access(ui, sheet, labels, weak, acts);
         });
@@ -915,11 +905,7 @@ fn save_first(ui: &mut Ui, sheet: &mut Sheet, labels: &ShareLabels, acts: &mut V
                         // The account, because two entries both reading
                         // "Cloud" tell nobody which one a document is about to
                         // land in.
-                        let under = if destination.linked {
-                            destination.account.clone().unwrap_or_default()
-                        } else {
-                            labels.sign_in.clone()
-                        };
+                        let under = if destination.linked { destination.account.clone().unwrap_or_default() } else { labels.sign_in.clone() };
                         ui.label(RichText::new(under).small().color(weak));
                     });
                 });
@@ -940,10 +926,7 @@ fn save_first(ui: &mut Ui, sheet: &mut Sheet, labels: &ShareLabels, acts: &mut V
 
     ui.add_space(8.0);
     let saving = sheet.saving.is_some();
-    ui.add_enabled(
-        !saving,
-        egui::TextEdit::singleline(&mut sheet.save_as).hint_text(labels.name_hint.as_str()).desired_width(f32::INFINITY),
-    );
+    ui.add_enabled(!saving, egui::TextEdit::singleline(&mut sheet.save_as).hint_text(labels.name_hint.as_str()).desired_width(f32::INFINITY));
 
     if let Some(problem) = &sheet.save_error {
         ui.add_space(4.0);
@@ -954,8 +937,7 @@ fn save_first(ui: &mut Ui, sheet: &mut Sheet, labels: &ShareLabels, acts: &mut V
     ui.horizontal(|ui| {
         let named = !sheet.save_as.trim().is_empty();
         let label = if saving { labels.saving.clone() } else { labels.save_and_share.clone() };
-        let button =
-            egui::Button::new(RichText::new(label).strong()).fill(ui.visuals().selection.bg_fill).min_size(egui::vec2(124.0, 26.0));
+        let button = egui::Button::new(RichText::new(label).strong()).fill(ui.visuals().selection.bg_fill).min_size(egui::vec2(124.0, 26.0));
         if ui.add_enabled(named && !saving, button).clicked() {
             acts.push(Act::SaveAs { destination: into.clone(), name: sheet.save_as.trim().to_owned() });
         }
@@ -1068,11 +1050,7 @@ fn commit(sheet: &mut Sheet) {
     if let Some(exact) = sheet
         .matches
         .iter()
-        .find(|c| {
-            c.id.to_lowercase() == typed
-                || c.email.as_deref().is_some_and(|e| e.to_lowercase() == typed)
-                || c.name.to_lowercase() == typed
-        })
+        .find(|c| c.id.to_lowercase() == typed || c.email.as_deref().is_some_and(|e| e.to_lowercase() == typed) || c.name.to_lowercase() == typed)
         .cloned()
     {
         choose(sheet, &exact);
@@ -1178,7 +1156,12 @@ fn access(ui: &mut Ui, sheet: &Sheet, labels: &ShareLabels, weak: Color32, acts:
                     let glyph = if busy { "\u{22ef}" } else { "\u{1f5d1}" };
                     let bin = egui::Button::new(RichText::new(glyph).size(15.0)).frame(false);
                     let hint = if busy { labels.withdrawing.as_str() } else { labels.withdraw.as_str() };
-                    if ui.add_enabled(!busy, bin).on_hover_text(hint).clicked() {
+                    let pressed = ui.add_enabled(!busy, bin);
+                    // A glyph is not a name. Left alone this button announces itself
+                    // to a screen reader as a wastebasket character, so the word goes
+                    // on explicitly.
+                    pressed.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, hint));
+                    if pressed.on_hover_text(hint).clicked() {
                         acts.push(Act::Withdraw(share.id.clone()));
                     }
                     if let Some(url) = &share.url

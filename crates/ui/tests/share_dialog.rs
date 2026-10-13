@@ -1,3 +1,6 @@
+//! Gated on the `share` feature, which is off by default.
+#![cfg(feature = "share")]
+
 //! The share dialog driven through its real widgets, offscreen.
 //!
 //! Every assertion here reads the accessibility tree the dialog actually
@@ -102,7 +105,13 @@ impl Harness {
 
     /// An ordinary deployment: files, sharing, contacts and mail.
     fn everything() -> (Harness, Fake) {
-        Harness::new(vec![Capability::Files, Capability::Sharing, Capability::Contacts, Capability::Mail], Vec::new())
+        Harness::new(
+            // Everything, which has to include ShareNotify. Notifying a
+            // recipient of a share is a separate ability from sending
+            // arbitrary mail, and the box is gated on the former.
+            vec![Capability::Files, Capability::Sharing, Capability::Contacts, Capability::Mail, Capability::ShareNotify],
+            Vec::new(),
+        )
     }
 
     fn frame(&mut self, events: Vec<Event>) -> FullOutput {
@@ -219,6 +228,13 @@ fn text(output: &FullOutput) -> Vec<String> {
     seen(output).into_iter().map(|s| s.label).collect()
 }
 
+/// The primary action, taken from the defaults the dialog actually draws.
+/// A literal here drifts the moment the wording changes.
+const SEND: &str = "Send";
+
+/// The permission dropdown, chevron included. It is a menu, not a toggle.
+const PERMISSION: &str = "View  ▾";
+
 fn says(output: &FullOutput, fragment: &str) -> bool {
     text(output).iter().any(|line| line.contains(fragment))
 }
@@ -235,14 +251,7 @@ fn person(id: &str, name: &str) -> Contact {
 }
 
 fn group(id: &str, name: &str) -> Contact {
-    Contact {
-        id: id.into(),
-        target: ShareTarget::Group(id.into()),
-        name: name.into(),
-        email: None,
-        avatar: None,
-        is_group: true,
-    }
+    Contact { id: id.into(), target: ShareTarget::Group(id.into()), name: name.into(), email: None, avatar: None, is_group: true }
 }
 
 fn existing(id: &str, target: ShareTarget, permission: Permission) -> Share {
@@ -311,7 +320,7 @@ fn a_chip_takes_one_recipient_back_and_leaves_the_others() {
     assert!(!buttons(&output).iter().any(|b| b == "Remove Bob Vine"), "the removed chip is gone; saw {:?}", buttons(&output));
 
     // And the share that follows carries the two that are left.
-    h.click("Share");
+    h.click(SEND);
     let parked = fake.parked();
     let Some(Request::Grant(grant)) = parked.first() else { panic!("expected a share, saw {parked:?}") };
     assert_eq!(grant.targets, vec![ShareTarget::User("ann".into()), ShareTarget::User("cal".into())]);
@@ -385,7 +394,7 @@ fn sharing_with_five_where_one_address_is_wrong_names_the_one_that_failed() {
         h.click(&found.name);
     }
     h.typing = false;
-    h.click("Share");
+    h.click(SEND);
 
     fake.answer(Answer::Granted {
         shared: vec![existing("s1", ShareTarget::User("ann".into()), Permission::View)],
@@ -416,7 +425,7 @@ fn a_refusal_that_stopped_everything_is_shown_as_itself() {
     h.frame(Vec::new());
     h.click("Ann Reed");
     h.typing = false;
-    h.click("Share");
+    h.click(SEND);
 
     let Some((_, reply)) = fake.take(0) else { panic!("expected a share in flight") };
     reply.refuse("sign in again");
@@ -424,7 +433,7 @@ fn a_refusal_that_stopped_everything_is_shown_as_itself() {
 
     assert!(says(&output, "sign in again"));
     assert!(!says(&output, "Not shared with"), "a refusal is not a per-recipient failure");
-    assert!(control(&output, "Share").is_some(), "the button comes back");
+    assert!(control(&output, SEND).is_some(), "the button comes back");
 }
 
 #[test]
@@ -436,8 +445,10 @@ fn a_note_and_a_permission_travel_with_the_share() {
     h.frame(Vec::new());
     h.click("Ann Reed");
     h.typing = false;
+    // The permission is a menu now, so it takes opening before choosing.
+    h.click(PERMISSION);
     h.click("Edit");
-    h.click("Share");
+    h.click(SEND);
 
     let parked = fake.parked();
     let Some(Request::Grant(grant)) = parked.first() else { panic!("expected a share, saw {parked:?}") };
@@ -456,7 +467,7 @@ fn a_server_that_cannot_send_mail_is_never_promised_a_notification() {
     h.frame(Vec::new());
     h.click("Ann Reed");
     h.typing = false;
-    h.click("Share");
+    h.click(SEND);
 
     let parked = fake.parked();
     let Some(Request::Grant(grant)) = parked.first() else { panic!("expected a share, saw {parked:?}") };
@@ -528,8 +539,8 @@ fn an_unsaved_document_is_told_to_save_rather_than_refused_by_the_server() {
     let (mut h, fake) = Harness::everything();
     h.dialog.open("", "Book1");
     let output = h.frame(Vec::new());
-    assert!(says(&output, "Save this document to the cloud"));
-    assert!(control(&output, "Share").is_none(), "there is nothing to share yet");
+    assert!(says(&output, "Save this document somewhere to share it."));
+    assert!(control(&output, SEND).is_none(), "there is nothing to share yet");
     assert!(!fake.seen().iter().any(|r| matches!(r, Request::Access { .. })));
 }
 
@@ -560,7 +571,7 @@ fn a_typed_address_says_how_to_add_it_and_adding_it_works() {
     let output = h.frame(Vec::new());
     assert!(buttons(&output).iter().any(|b| b == "Remove outside@example.com"), "saw {:?}", buttons(&output));
 
-    h.click("Share");
+    h.click(SEND);
     let parked = fake.parked();
     let Some(Request::Grant(grant)) = parked.first() else { panic!("expected a share, saw {parked:?}") };
     assert_eq!(grant.targets, vec![ShareTarget::Email("outside@example.com".into())]);

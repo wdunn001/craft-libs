@@ -10,5 +10,7 @@ pub mod docking;
 pub mod icons;
 pub mod layout;
 pub mod printing;
+#[cfg(feature = "share")]
+pub mod share;
 pub mod tabs;
 pub mod theme;
