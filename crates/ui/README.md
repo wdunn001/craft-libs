@@ -284,6 +284,16 @@ the provider. An app reaching it is what this whole arrangement exists to preven
 decided otherwise wraps the backend and answers that one request. A service that relays pictures
 does the same. Nothing else changes.
 
+### The account
+
+`account::AccountMenu` is the badge every suite puts in the top right. It shows who is signed in,
+where they are signed in, and whether storage is linked. It holds no credential. It asks the
+service who the caller is, through the application. It reports what the user asked for through
+`take_action`. The application owns what signing in means.
+
+Without linked storage, Open and Save have nowhere to go. The menu says so at rest. A failure at
+the moment of saving arrives too late to be useful.
+
 ## Compatibility and checks
 
 The crate uses egui 0.36 and Rust 1.95 or later. Its production dependency disables egui's default
