@@ -642,6 +642,232 @@ fn sharing_is_still_read_from_an_instance_that_has_no_talk() {
     assert!(!found.contains(&craft_cloud::Capability::Conversation));
 }
 
+// ---- mail -------------------------------------------------------------------
+
+/// Two accounts. One receives only. The app signals that by leaving `smtpHost`
+/// out of the row altogether. The other is set up to send.
+const MAIL_ACCOUNTS: &str = r#"[
+  {"id":2,"accountId":2,"name":"Alice (archive)","emailAddress":"archive@example.net","sentMailboxId":9},
+  {"id":3,"accountId":3,"name":"Alice","emailAddress":"alice@example.net","smtpHost":"smtp.example.net","smtpPort":587,"sentMailboxId":11}
+]"#;
+
+/// What the outbox answers for a message it accepted. The id is the only part
+/// the send needs.
+const OUTBOX_CREATED: &str = r#"{"status":"success","data":{"id":77,"accountId":3,"subject":"A document for you"}}"#;
+
+const OUTBOX_SENT: &str = r#"{"status":"success","data":"Message sent"}"#;
+
+/// The capabilities answer. It says nothing either way about Mail. The app
+/// registers nothing there. That is why `capabilities` has to ask the app.
+const CAPABILITIES: &str = r#"{"ocs":{"data":{"capabilities":{"files_sharing":{"public":{"enabled":true}}}}}}"#;
+
+fn a_mail() -> craft_cloud::MailMessage {
+    craft_cloud::MailMessage {
+        to: vec!["bob@example.net".to_owned()],
+        subject: "A document for you".to_owned(),
+        body: "Here is the link: https://cloud.example.net/s/abc".to_owned(),
+        html: false,
+    }
+}
+
+fn mail_script(last: Response) -> std::rc::Rc<Fake> {
+    std::rc::Rc::new(Fake::new(vec![
+        Response::new(200, MAIL_ACCOUNTS.as_bytes().to_vec()),
+        Response::new(201, OUTBOX_CREATED.as_bytes().to_vec()),
+        last,
+    ]))
+}
+
+#[test]
+fn mail_accounts_parse_from_the_apps_own_list() {
+    let a = acct();
+    let http = Fake::one(200, MAIL_ACCOUNTS);
+    let found = crate::Mail::new(&a).accounts(&http).expect("accounts");
+
+    assert_eq!(found.len(), 2, "both accounts belong in the list: {found:#?}");
+    assert_eq!(found[0].id, 2);
+    assert_eq!(found[0].email, "archive@example.net");
+    assert!(!found[0].can_send(), "an account with no outbound server has nothing to send through");
+
+    assert_eq!(found[1].id, 3);
+    assert_eq!(found[1].name, "Alice");
+    assert_eq!(found[1].smtp_host, "smtp.example.net");
+    assert_eq!(found[1].sent_mailbox, Some(11));
+    assert!(found[1].can_send());
+
+    let req = http.last();
+    assert_eq!(req.method, Method::Get);
+    assert_eq!(req.url, "https://cloud.example.net/index.php/apps/mail/api/accounts");
+    assert_eq!(req.get_header("accept"), Some("application/json"));
+}
+
+#[test]
+fn a_mail_account_row_with_no_address_is_skipped() {
+    let a = acct();
+    let http = Fake::one(200, r#"[{"accountId":4},{"accountId":5,"emailAddress":""},{"accountId":6,"emailAddress":"ok@x.test"}]"#);
+    let found = crate::Mail::new(&a).accounts(&http).expect("accounts");
+
+    assert_eq!(found.len(), 1, "a row with no address describes nothing to send from: {found:#?}");
+    assert_eq!(found[0].email, "ok@x.test");
+    assert_eq!(found[0].name, "ok@x.test", "a nameless account falls back to its address");
+}
+
+#[test]
+fn sending_mail_composes_in_the_outbox_and_then_posts_the_id() {
+    use craft_cloud::Mail as _;
+
+    let http = mail_script(Response::new(202, OUTBOX_SENT.as_bytes().to_vec()));
+    let cloud = crate::Nextcloud::new(acct(), std::rc::Rc::clone(&http));
+    cloud.send(&a_mail()).expect("the mail goes out");
+
+    let asked = http.seen.borrow();
+    assert_eq!(asked.len(), 3, "a send is a list, a compose and a post: {asked:#?}");
+
+    assert_eq!(asked[0].url, "https://cloud.example.net/index.php/apps/mail/api/accounts");
+
+    assert_eq!(asked[1].method, Method::Post);
+    assert_eq!(asked[1].url, "https://cloud.example.net/index.php/apps/mail/api/outbox");
+    assert_eq!(asked[1].get_header("content-type"), Some("application/json"));
+    // An app route, where this header still decides the outcome. Nextcloud's
+    // CSRF guard passes any request carrying it. That is what lets an app
+    // password work with no session cookie and no request token.
+    assert_eq!(asked[1].get_header("ocs-apirequest"), Some("true"));
+
+    let body = String::from_utf8_lossy(&asked[1].body);
+    assert!(body.contains(r#""accountId":3"#), "the first account cannot send, so the second has to be chosen: {body}");
+    assert!(body.contains(r#""email":"bob@example.net""#), "{body}");
+    assert!(body.contains(r#""bodyPlain":"Here is the link"#), "{body}");
+    assert!(body.contains(r#""bodyHtml":null"#), "{body}");
+    assert!(body.contains(r#""isHtml":false"#), "{body}");
+    assert!(body.contains(r#""sendAt":null"#), "a send time would let the server's cron send it a second time: {body}");
+
+    assert_eq!(asked[2].method, Method::Post);
+    assert_eq!(
+        asked[2].url, "https://cloud.example.net/index.php/apps/mail/api/outbox/77",
+        "the id from the compose has to key the send, asked {:?}",
+        asked[2].url
+    );
+}
+
+#[test]
+fn an_html_message_travels_in_the_html_body() {
+    use craft_cloud::Mail as _;
+
+    let http = mail_script(Response::new(202, OUTBOX_SENT.as_bytes().to_vec()));
+    let cloud = crate::Nextcloud::new(acct(), std::rc::Rc::clone(&http));
+    let mut message = a_mail();
+    message.html = true;
+    message.body = "<p>Here is the link</p>".to_owned();
+    cloud.send(&message).expect("the mail goes out");
+
+    let asked = http.seen.borrow();
+    let body = String::from_utf8_lossy(&asked[1].body);
+    assert!(body.contains(r#""bodyHtml":"<p>Here is the link</p>""#), "{body}");
+    assert!(body.contains(r#""bodyPlain":null"#), "{body}");
+    assert!(body.contains(r#""isHtml":true"#), "{body}");
+}
+
+#[test]
+fn a_user_with_no_account_that_can_send_is_told_the_provider_cannot() {
+    use craft_cloud::Mail as _;
+
+    // The app is installed and this user has configured nothing.
+    let nothing = crate::Nextcloud::new(acct(), Fake::one(200, "[]"));
+    let refused = nothing.send(&a_mail());
+    assert!(matches!(refused, Err(craft_cloud::Error::Unsupported(_))), "no mail account leaves nothing to send from, got {refused:?}");
+
+    // One account. It receives and has no outbound server.
+    let http = std::rc::Rc::new(Fake::one(200, r#"[{"accountId":2,"emailAddress":"archive@example.net","sentMailboxId":9}]"#));
+    let cloud = crate::Nextcloud::new(acct(), std::rc::Rc::clone(&http));
+    let refused = cloud.send(&a_mail());
+    assert!(matches!(refused, Err(craft_cloud::Error::Unsupported(_))), "an account with no SMTP host cannot send, got {refused:?}");
+    assert_eq!(http.seen.borrow().len(), 1, "nothing should have reached the outbox");
+}
+
+#[test]
+fn a_malformed_mail_answer_is_reported_as_malformed() {
+    use craft_cloud::Mail as _;
+
+    // An envelope, where the accounts controller answers a bare list.
+    let wrong_shape = crate::Nextcloud::new(acct(), Fake::one(200, r#"{"status":"success","data":[]}"#));
+    let broken = wrong_shape.send(&a_mail());
+    assert!(matches!(broken, Err(craft_cloud::Error::Malformed { .. })), "a list of accounts was promised, got {broken:?}");
+
+    // A sign-in page. That is what a misconfigured front end answers with.
+    let not_json = crate::Nextcloud::new(acct(), Fake::one(200, "<html>sign in</html>"));
+    let broken = not_json.send(&a_mail());
+    assert!(matches!(broken, Err(craft_cloud::Error::Malformed { .. })), "{broken:?}");
+
+    // The compose was accepted and named no message.
+    let http = std::rc::Rc::new(Fake::new(vec![
+        Response::new(200, MAIL_ACCOUNTS.as_bytes().to_vec()),
+        Response::new(201, br#"{"status":"success","data":{"subject":"A document for you"}}"#.to_vec()),
+    ]));
+    let cloud = crate::Nextcloud::new(acct(), std::rc::Rc::clone(&http));
+    let broken = cloud.send(&a_mail());
+    assert!(matches!(broken, Err(craft_cloud::Error::Malformed { .. })), "an outbox answer with no id leaves nothing to post, got {broken:?}");
+    assert_eq!(http.seen.borrow().len(), 2, "the send must not be attempted without an id");
+}
+
+#[test]
+fn a_message_with_no_recipient_is_refused_before_anything_is_composed() {
+    use craft_cloud::Mail as _;
+
+    let http = std::rc::Rc::new(Fake::one(200, MAIL_ACCOUNTS));
+    let cloud = crate::Nextcloud::new(acct(), std::rc::Rc::clone(&http));
+    let mut message = a_mail();
+    message.to = vec![" ".to_owned()];
+    let refused = cloud.send(&message);
+
+    assert!(matches!(refused, Err(craft_cloud::Error::Invalid { what: "mail recipients", .. })), "{refused:?}");
+    assert_eq!(http.seen.borrow().len(), 1, "nothing should have reached the outbox");
+}
+
+#[test]
+fn a_refused_send_carries_the_servers_own_sentence() {
+    use craft_cloud::Mail as _;
+
+    let refusal = br#"{"status":"error","message":"Could not send message","data":[],"code":0}"#.to_vec();
+    let http = mail_script(Response::new(500, refusal));
+    let cloud = crate::Nextcloud::new(acct(), std::rc::Rc::clone(&http));
+    let failed = cloud.send(&a_mail()).expect_err("a refused send has to surface");
+
+    let shown = failed.to_string();
+    assert!(shown.contains("Could not send message"), "the server said why, and the caller has to see it: {shown}");
+    assert!(!shown.contains("/outbox/"), "the endpoint is not the reason: {shown}");
+}
+
+#[test]
+fn mail_is_reported_only_when_an_account_can_actually_send() {
+    use craft_cloud::Provider as _;
+
+    fn capabilities_then(accounts: Response) -> Vec<craft_cloud::Capability> {
+        let http = Fake::new(vec![Response::new(200, CAPABILITIES.as_bytes().to_vec()), accounts]);
+        crate::Nextcloud::new(acct(), http).capabilities()
+    }
+
+    let found = capabilities_then(Response::new(200, MAIL_ACCOUNTS.as_bytes().to_vec()));
+    assert!(found.contains(&craft_cloud::Capability::Mail));
+    assert!(found.contains(&craft_cloud::Capability::LinkShares), "reading the two out of two answers must not let either hide the other");
+
+    // The app was never installed. The route is not there.
+    let absent = capabilities_then(Response::new(404, b"<html>Not Found</html>".to_vec()));
+    assert!(!absent.contains(&craft_cloud::Capability::Mail), "an instance without the app must not be offered as one that sends");
+
+    // The app is installed and this user has configured nothing.
+    let unconfigured = capabilities_then(Response::new(200, b"[]".to_vec()));
+    assert!(!unconfigured.contains(&craft_cloud::Capability::Mail), "a user with no mail account must not be offered a send");
+
+    // One account, receiving only.
+    let receive_only = capabilities_then(Response::new(200, br#"[{"accountId":2,"emailAddress":"a@x.test","sentMailboxId":9}]"#.to_vec()));
+    assert!(!receive_only.contains(&craft_cloud::Capability::Mail), "an account with no SMTP host cannot send");
+
+    // An outbound server with nowhere to file the sent copy. The app's send
+    // chain stops at its first step for this one and reports a failure.
+    let no_sent_mailbox = capabilities_then(Response::new(200, br#"[{"accountId":3,"emailAddress":"a@x.test","smtpHost":"smtp.x.test"}]"#.to_vec()));
+    assert!(!no_sent_mailbox.contains(&craft_cloud::Capability::Mail), "a send that cannot file its copy fails, so it must not be claimed");
+}
+
 #[test]
 fn a_provider_with_no_conversations_says_so_without_being_asked_twice() {
     use craft_cloud::Conversations as _;

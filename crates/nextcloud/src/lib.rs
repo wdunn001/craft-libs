@@ -1,5 +1,5 @@
-//! Nextcloud for the Craft apps: files over WebDAV, sharing through the OCS Share API, and
-//! contacts over CardDAV.
+//! Nextcloud for the Craft apps: files over WebDAV, sharing through the OCS Share API, contacts
+//! over CardDAV, and mail through the Mail app.
 //!
 //! The crate builds requests and parses responses. It opens no sockets. The caller supplies a
 //! transport by implementing [`Http`], so the same code serves a native app and a WebAssembly
@@ -7,6 +7,9 @@
 //!
 //! Written from the public specifications: WebDAV ([RFC 4918]), CardDAV ([RFC 6352]), vCard 4.0
 //! ([RFC 6350]) and Nextcloud's published OCS Share API. No Nextcloud code is used.
+//!
+//! The Mail app is the one surface here with no published specification. [`Mail`] records how its
+//! routes and parameters were established.
 //!
 //! Like every Craft parser, the readers are lenient and bounded. Unknown elements are skipped,
 //! missing properties fall back to defaults, and sizes are capped, so a hostile or simply odd
@@ -33,6 +36,7 @@ mod dav;
 mod error;
 mod http;
 mod login;
+mod mail;
 mod provider;
 mod share;
 mod xml;
@@ -45,6 +49,7 @@ pub use dav::{Entry, Files, Lock};
 pub use error::{Error, Result};
 pub use http::{Http, Method, Request, Response};
 pub use login::{AppPassword, LoginFlow, begin, collab_token};
+pub use mail::{Mail, MailAccount, NewMessage};
 pub use provider::Nextcloud;
 pub use share::{NewShare, Permissions, Share, ShareKind, Shares};
 
@@ -115,6 +120,15 @@ impl Account {
     /// The OCS Share API root.
     pub(crate) fn ocs_share_root(&self) -> String {
         format!("{}/ocs/v2.php/apps/files_sharing/api/v1", self.base)
+    }
+
+    /// The Mail app's own API root.
+    ///
+    /// Through `index.php`. That form answers on every instance. The bare `/apps/mail` form
+    /// depends on the web server rewriting pretty URLs. An administrator can leave that off. The
+    /// OCS surface is no help either. The Mail app contributes only read routes there.
+    pub(crate) fn mail_api_root(&self) -> String {
+        format!("{}/index.php/apps/mail/api", self.base)
     }
 
     /// A request with authentication and the headers Nextcloud wants on every call.

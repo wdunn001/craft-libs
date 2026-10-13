@@ -1,8 +1,8 @@
 //! Nextcloud as one implementation of the `craft-cloud` contracts.
 //!
 //! Everything here maps a generic call onto this product's own APIs: WebDAV
-//! for files, the OCS Share API for sharing, CardDAV for contacts. Nothing
-//! above this layer knows which of those it is getting.
+//! for files, the OCS Share API for sharing, CardDAV for contacts, the Mail
+//! app for mail. Nothing above this layer knows which of those it is getting.
 //!
 //! The provider owns its transport, because the contracts take none. That is
 //! the difference between this crate's own modules, which accept an `Http` on
@@ -15,6 +15,7 @@ use craft_cloud::{
 };
 
 use crate::http::{Http, Method};
+use crate::mail::{Mail, MailAccount, NewMessage};
 use crate::share::{NewShare, Permissions, ShareKind};
 use crate::{Account, Contacts, Error, Files, Shares, send};
 
@@ -60,7 +61,15 @@ fn lift(e: Error) -> CloudError {
         Error::Status { status: 403, body, .. } => CloudError::Forbidden(reason(&body, "refused")),
         Error::Status { status: 404, body, .. } => CloudError::not_found("entry", reason(&body, "no such entry")),
         Error::Status { status: 409 | 412, body, .. } => CloudError::Conflict(reason(&body, "changed since you opened it")),
-        Error::Status { method, path, status, .. } => CloudError::Unreachable(format!("{method} {path} returned HTTP {status}")),
+        // The same lesson as the arms above, one status further out. A Mail
+        // send that SMTP refuses arrives as a 500 carrying "Could not send
+        // message". That sentence is the only thing a user can act on. Where
+        // the body carries nothing, the method and the status are all there
+        // is to report.
+        Error::Status { method, path, status, body } => match explanation(&body) {
+            Some(detail) => CloudError::Unreachable(format!("{method} returned HTTP {status}: {detail}")),
+            None => CloudError::Unreachable(format!("{method} {path} returned HTTP {status}")),
+        },
         // OCS answers HTTP 200 and reports the real outcome in its own
         // envelope, so these codes are the only signal there is.
         Error::Ocs { code: 403 | 404, message } => CloudError::Forbidden(message),
@@ -70,18 +79,34 @@ fn lift(e: Error) -> CloudError {
     }
 }
 
-/// The server's own explanation, out of an OCS body.
+/// The server's own explanation, out of a response body.
 ///
 /// OCS puts a human sentence in `<message>` even when it answers with an HTTP
-/// status, and that sentence is the only part worth showing. `fallback` covers
-/// a body that carries nothing useful.
-fn reason(body: &str, fallback: &str) -> String {
-    let Some(start) = body.find("<message>") else { return fallback.to_owned() };
-    let rest = &body[start + "<message>".len()..];
-    match rest.find("</message>") {
-        Some(end) if end > 0 => rest[..end].trim().to_owned(),
-        _ => fallback.to_owned(),
+/// status. That sentence is the only part worth showing. The Mail app answers
+/// JSON and puts the same thing in a `"message"` field. Both forms therefore
+/// turn up here.
+///
+/// A scan does the reading, where a parser would read better.
+/// [`Error::Status`] truncates the body it carries so a server answering with
+/// a whole HTML error page cannot flood a log line. A parser cannot read a
+/// document that stops in the middle. A scan still finds the sentence in a
+/// truncated body as long as the sentence itself survived.
+fn explanation(body: &str) -> Option<String> {
+    for (open, close) in [("<message>", "</message>"), ("\"message\":\"", "\"")] {
+        let Some(start) = body.find(open) else { continue };
+        let rest = &body[start + open.len()..];
+        let Some(end) = rest.find(close).filter(|end| *end > 0) else { continue };
+        let found = rest[..end].trim();
+        if !found.is_empty() {
+            return Some(found.to_owned());
+        }
     }
+    None
+}
+
+/// The server's explanation, or `fallback` where it gave none.
+fn reason(body: &str, fallback: &str) -> String {
+    explanation(body).unwrap_or_else(|| fallback.to_owned())
 }
 
 fn entry_from(e: crate::dav::Entry, shared_by: Option<String>, writable: bool) -> CloudEntry {
@@ -375,13 +400,31 @@ impl<H: Http> craft_cloud::Notifications for Nextcloud<H> {
     }
 }
 
+/// Mail, through the Mail app.
+///
+/// An earlier revision refused this and said Nextcloud had no general send.
+/// That was wrong. Mail is a separate app carrying its own API. An instance
+/// running it sends to whoever the caller names.
+///
+/// The external recipient flow depends on exactly that. A share to somebody
+/// with no account mints a keyed link. The link then has to reach them.
+///
+/// The send goes from one of this user's own mail accounts. The recipient
+/// sees a person they can reply to.
 impl<H: Http> craft_cloud::Mail for Nextcloud<H> {
-    fn send(&self, _message: &MailMessage) -> CloudResult<()> {
-        // Nextcloud exposes no general "send this mail" API. The one place it
-        // will send is a share to an address, which `Sharing::share` asks for.
-        // Claiming otherwise here would fail at the worst moment, so the
-        // capability list leaves Mail out and this says so plainly.
-        Err(CloudError::Unsupported("sending arbitrary mail"))
+    fn send(&self, message: &MailMessage) -> CloudResult<()> {
+        let mail = Mail::new(&self.account);
+        let accounts = mail.accounts(&self.http).map_err(lift)?;
+        // The first account that can send, in the server's own order. That is
+        // the order the Mail app itself composes from.
+        let Some(from) = accounts.iter().find(|a| a.can_send()) else {
+            // Nothing to grant here and nothing to retry. The capability list
+            // leaves Mail out in this same case. A caller that checks first
+            // never arrives here.
+            return Err(CloudError::Unsupported("sending mail without a mail account that can send"));
+        };
+        let outgoing = NewMessage { to: message.to.clone(), subject: message.subject.clone(), body: message.body.clone(), html: message.html };
+        mail.send(&self.http, from.id, &outgoing).map_err(lift)
     }
 }
 
@@ -446,6 +489,24 @@ impl<H: Http> Nextcloud<H> {
         }
         out
     }
+
+    /// Whether this account can send mail right now.
+    ///
+    /// The capabilities endpoint cannot answer this one. Mail registers
+    /// nothing there. An instance running it reads exactly like an instance
+    /// that never installed it. Talk is the counter-example. That is why
+    /// `spreed` above can be read from a single call.
+    ///
+    /// So this asks the app. The account list answers the stronger question
+    /// anyway. It says whether this user has an account configured well
+    /// enough to send. An instance without the app refuses the route. That
+    /// reads as absent.
+    ///
+    /// The cost is a second call inside `capabilities`. A claimed capability
+    /// that fails on first use costs more.
+    fn can_send_mail(&self) -> bool {
+        Mail::new(&self.account).accounts(&self.http).is_ok_and(|accounts| accounts.iter().any(MailAccount::can_send))
+    }
 }
 
 /// Talk, keyed on the file id.
@@ -500,6 +561,11 @@ impl<H: Http> craft_cloud::Provider for Nextcloud<H> {
             Capability::ShareNotify,
         ];
         out.extend(self.instance_capabilities());
+        // The capabilities endpoint says nothing about the Mail app. This is
+        // asked separately. See `can_send_mail`.
+        if self.can_send_mail() {
+            out.push(Capability::Mail);
+        }
         out
     }
 }
