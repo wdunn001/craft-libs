@@ -47,6 +47,14 @@ pub struct Me {
     /// What the provider behind CollabCraft can do, so a UI hides what it
     /// cannot deliver rather than offering a button that fails.
     pub capabilities: Vec<Capability>,
+    /// What the provider calls the place people work together on a document,
+    /// where it offers one at all.
+    ///
+    /// Read rather than written into an app, so a deployment that calls it
+    /// something other than Talk reads correctly. Absent from an older
+    /// service's answer, which leaves a caller to name the action plainly.
+    #[serde(default)]
+    pub conversation_name: Option<String>,
     /// Until this is true, Open and Save have nowhere to go.
     pub provider_linked: bool,
 }
