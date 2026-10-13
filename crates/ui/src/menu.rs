@@ -117,13 +117,18 @@ pub fn overflow(ui: &mut Ui, items: &[MenuItem], labels: &MenuLabels) -> Option<
 pub fn split(ui: &mut Ui, primary: &str, items: &[MenuItem], labels: &MenuLabels) -> Option<SplitHit> {
     let mut hit = None;
     ui.horizontal(|ui| {
-        // The halves touch, so they read as one control with two parts.
+        // The halves touch, so they read as one control with two parts. Square
+        // off the inside corners as well. Two default radii leave a pair of
+        // notches at the seam, which reads as two buttons that happen to abut.
         ui.spacing_mut().item_spacing.x = 0.0;
-        if ui.button(primary).clicked() {
+        let radius = ui.visuals().widgets.inactive.corner_radius;
+        let left = egui::CornerRadius { ne: 0, se: 0, ..radius };
+        let right = egui::CornerRadius { nw: 0, sw: 0, ..radius };
+        if ui.add(egui::Button::new(primary).corner_radius(left)).clicked() {
             hit = Some(SplitHit::Primary);
         }
         // Room for the triangle, which is painted rather than typed.
-        let more = ui.button("    ");
+        let more = ui.add(egui::Button::new("    ").corner_radius(right));
         crate::buttons::chevron(ui, more.rect, ui.visuals().text_color());
         let name = labels.more_for.replace("{action}", &primary.to_lowercase());
         more.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));

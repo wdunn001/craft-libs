@@ -79,6 +79,10 @@ pub struct AccountLabels {
     pub not_linked: String,
     pub manage: String,
     pub working: String,
+    /// Shown when accounts are signed in and none is in use.
+    pub choose: String,
+    /// Why that happened, since a person who did not sign out needs telling.
+    pub choose_why: String,
 }
 
 impl Default for AccountLabels {
@@ -94,6 +98,8 @@ impl Default for AccountLabels {
             not_linked: "No storage connected".into(),
             manage: "Account settings".into(),
             working: "Working\u{2026}".into(),
+            choose: "Choose an account".into(),
+            choose_why: "The account you were using is no longer signed in.".into(),
         }
     }
 }
@@ -132,12 +138,23 @@ impl AccountMenu {
     /// Wholesale rather than one at a time. A session that missed a sign-out
     /// elsewhere would otherwise keep offering an account that is gone.
     ///
-    /// The active account is kept when it is still in the list. Otherwise the
-    /// first becomes active, since a list with nobody marked would leave every
-    /// save without a destination.
+    /// The account in use is kept when it is still in the list.
+    ///
+    /// When it has gone, nothing takes its place. A work session that expires
+    /// would otherwise hand the next save, share and open to a personal
+    /// account without saying so, and sending a document to the wrong tenant
+    /// is not a mistake a person can take back. The control asks instead.
+    ///
+    /// The first account is chosen only when none was in use at all, which is
+    /// the first sign-in.
     pub fn set(&mut self, accounts: Vec<Account>) {
+        let chose_before = self.active.is_some();
         let kept = self.active.take().filter(|id| accounts.iter().any(|a| a.id == *id));
-        self.active = kept.or_else(|| accounts.first().map(|a| a.id.clone()));
+        self.active = match kept {
+            Some(id) => Some(id),
+            None if chose_before => None,
+            None => accounts.first().map(|a| a.id.clone()),
+        };
         self.accounts = accounts;
         self.busy = false;
     }
@@ -182,12 +199,39 @@ impl AccountMenu {
         let busy = self.busy;
 
         let Some(account) = self.active().cloned() else {
-            // Signed out. A word, because a bare badge with no name on it says
-            // nothing about what pressing it would do.
-            let label = if busy { labels.working.as_str() } else { labels.sign_in.as_str() };
-            if ui.add_enabled(!busy, egui::Button::new(label).small()).clicked() {
-                let _ = tx.send(AccountAction::SignIn);
+            // Nobody signed in, or signed in with the account that was in use
+            // now gone. The two read differently. One offers a sign-in. The
+            // other has accounts to offer and must say so, since saving has
+            // nowhere to go until somebody picks one.
+            if self.accounts.is_empty() {
+                let label = if busy { labels.working.as_str() } else { labels.sign_in.as_str() };
+                if ui.add_enabled(!busy, egui::Button::new(label).small()).clicked() {
+                    let _ = tx.send(AccountAction::SignIn);
+                }
+                return;
             }
+            let waiting = self.accounts.clone();
+            let hit = ui.add_enabled(!busy, egui::Button::new(labels.choose.as_str()).small());
+            egui::Popup::menu(&hit).show(|ui| {
+                ui.set_min_width(240.0);
+                ui.label(RichText::new(labels.choose_why.as_str()).small().color(ui.visuals().warn_fg_color));
+                ui.separator();
+                for one in &waiting {
+                    let label = format!("{}\n{}", one.display, one.service);
+                    let row = ui.add(egui::Button::new(label).wrap_mode(egui::TextWrapMode::Extend));
+                    let name = one.display.clone();
+                    row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
+                    if row.clicked() {
+                        let _ = tx.send(AccountAction::Use(one.id.clone()));
+                        ui.close();
+                    }
+                }
+                ui.add_space(4.0);
+                if ui.button(labels.sign_in.as_str()).clicked() {
+                    let _ = tx.send(AccountAction::SignIn);
+                    ui.close();
+                }
+            });
             return;
         };
 
@@ -244,10 +288,16 @@ impl AccountMenu {
                 ui.separator();
                 ui.label(RichText::new(labels.other_accounts.as_str()).small().color(ui.visuals().weak_text_color()));
                 for other in &others {
-                    let row = ui.button(other.display.as_str());
-                    // The deployment under each one. Two accounts reading
-                    // "Will Dunn" tell nobody which is the work one.
-                    ui.label(RichText::new(other.service.as_str()).small().color(ui.visuals().weak_text_color()));
+                    // Both lines in one control. A name above a subtitle, where
+                    // only the name answers a press, makes half the row look
+                    // broken to anybody who aims at the wrong half. The
+                    // deployment is on the second line because two accounts
+                    // both reading "Will Dunn" tell nobody which is the work
+                    // one.
+                    let label = format!("{}\n{}", other.display, other.service);
+                    let row = ui.add(egui::Button::new(label).wrap_mode(egui::TextWrapMode::Extend));
+                    let name = other.display.clone();
+                    row.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
                     if row.clicked() {
                         let _ = tx.send(AccountAction::Use(other.id.clone()));
                         ui.close();
@@ -309,12 +359,34 @@ mod tests {
     }
 
     #[test]
-    fn an_account_that_signed_out_elsewhere_does_not_stay_active() {
+    fn an_account_that_signed_out_elsewhere_leaves_nobody_in_use() {
         let mut menu = AccountMenu::new();
         menu.set(vec![account("a", "Work"), account("b", "Personal")]);
         menu.set_active("b");
         menu.set(vec![account("a", "Work")]);
-        assert_eq!(menu.active().map(|a| a.id.as_str()), Some("a"), "the one that is gone cannot stay in use");
+        // Not account a. A work session that expires must not hand the next
+        // save to a personal account without anybody saying so.
+        assert_eq!(menu.active(), None, "the one that is gone cannot be replaced in silence");
+        assert!(menu.is_signed_in(), "there is still an account here to choose");
+    }
+
+    #[test]
+    fn choosing_again_after_one_disappeared_works() {
+        let mut menu = AccountMenu::new();
+        menu.set(vec![account("a", "Work"), account("b", "Personal")]);
+        menu.set_active("b");
+        menu.set(vec![account("a", "Work")]);
+        menu.set_active("a");
+        assert_eq!(menu.active().map(|a| a.id.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn a_refresh_that_keeps_the_account_keeps_it_in_use() {
+        let mut menu = AccountMenu::new();
+        menu.set(vec![account("a", "Work"), account("b", "Personal")]);
+        menu.set_active("b");
+        menu.set(vec![account("b", "Personal"), account("c", "Lab")]);
+        assert_eq!(menu.active().map(|a| a.id.as_str()), Some("b"));
     }
 
     #[test]

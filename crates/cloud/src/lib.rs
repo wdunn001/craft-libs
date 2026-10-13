@@ -142,6 +142,13 @@ pub trait Conversations {
     ///
     /// Two people pressing the same control have to arrive in the same
     /// place, so this is expected to be idempotent for a given document.
+    ///
+    /// `id` is the provider's own handle and means nothing outside the
+    /// account it came from. A conversation is therefore keyed on the
+    /// provider, the account and the document together, and `self` carries
+    /// the first two. A document copied into another account is a different
+    /// document to its provider, so it gets a conversation of its own.
+    /// Nothing here can attach one account's thread to another's.
     fn conversation(&self, _id: &str, _title: &str) -> Result<Conversation> {
         Err(Error::Unsupported("conversations"))
     }

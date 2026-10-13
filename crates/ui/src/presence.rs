@@ -105,8 +105,17 @@ pub fn colour_for(id: &str) -> Color32 {
 ///
 /// A document drawing remote cursors calls this with the same identifiers and
 /// gets the same answer, which is what makes a cursor and the badge above it
-/// the same person. Beyond [`SLOTS`] peers the wheel repeats, since there is
-/// no seventeenth colour anybody could tell from the first sixteen.
+/// the same person. That holds on one screen whatever else is happening,
+/// since both calls see that client's own list.
+///
+/// Two clients mid-transition can disagree for a frame or two. One has seen
+/// somebody join and the other has not, so the walk resolves differently
+/// until both lists match. It settles by itself, and nobody is comparing two
+/// screens while it does. The durable fix is for the relay to hand out slots
+/// with the peer list, which takes a protocol change.
+///
+/// Beyond [`SLOTS`] peers the wheel repeats, since there is no seventeenth
+/// colour anybody could tell from the first sixteen.
 pub fn colours_for(ids: &[String]) -> Vec<Color32> {
     let mut order: Vec<usize> = (0..ids.len()).collect();
     order.sort_by(|a, b| ids[*a].cmp(&ids[*b]));
@@ -261,8 +270,15 @@ impl PresenceBar {
             // circles read as four separate controls instead of one group.
             ui.spacing_mut().item_spacing.x = -OVERLAP;
             // Right to left, so the first person sits on top of the stack.
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let hidden = self.peers.len().saturating_sub(self.shown);
+            //
+            // Allocated to just the width the badges need. A right-to-left
+            // layout given the whole container takes it, which pushes the row
+            // to the far edge of a toolbar and strands the sentence after it.
+            let shown = self.peers.len().min(self.shown);
+            let hidden = self.peers.len().saturating_sub(self.shown);
+            let count = shown + usize::from(hidden > 0);
+            let width = BADGE + (count.saturating_sub(1) as f32) * (BADGE - OVERLAP);
+            ui.allocate_ui_with_layout(egui::vec2(width, BADGE), Layout::right_to_left(Align::Center), |ui| {
                 if hidden > 0 {
                     let more = self.labels.and_more.replace("{count}", &hidden.to_string());
                     let weak = ui.visuals().widgets.inactive.bg_fill;
