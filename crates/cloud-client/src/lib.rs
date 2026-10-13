@@ -128,11 +128,7 @@ impl Client {
                 // Trust what the machine trusts. The default is Mozilla's root
                 // list, which rejects any CollabCraft behind an internally
                 // signed certificate, and says only "UnknownIssuer".
-                .tls_config(
-                    ureq::tls::TlsConfig::builder()
-                        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                        .build(),
-                )
+                .tls_config(ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build())
                 // A non-2xx is an answer carrying a reason, not a transport
                 // failure. Treating it as an error would throw the body away
                 // and leave every refusal looking identical.
