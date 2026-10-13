@@ -16,7 +16,7 @@
 
 use std::time::Duration;
 
-use craft_cloud::{Capability, Contact, Entry, Permission, Share, ShareTarget};
+use craft_cloud::{Capability, Contact, Conversation, Entry, Permission, Share, ShareTarget};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -290,6 +290,15 @@ impl Client {
     /// which address failed instead of failing the lot.
     pub fn share(&self, request: &ShareRequest) -> Result<ShareOutcome> {
         parse(&self.post_json("/api/v1/shares", request)?)
+    }
+
+    /// Where to go to work together on a document.
+    ///
+    /// The service decides whether the caller may, and which provider
+    /// answers. A refusal here is a refusal to open that document, never
+    /// a hint about how the provider is configured.
+    pub fn conversation(&self, id: &str) -> Result<Conversation> {
+        parse(&self.get(&format!("/api/v1/conversation?id={}", enc(id)))?)
     }
 
     pub fn shares(&self, id: &str) -> Result<Vec<Share>> {

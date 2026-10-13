@@ -10,8 +10,8 @@
 //! surface, which is what an application actually holds.
 
 use craft_cloud::{
-    Capability, Contact as CloudContact, Entry as CloudEntry, EntryKind, Error as CloudError, Identity, MailMessage, Notification, Permission,
-    Result as CloudResult, Share as CloudShare, ShareOptions, ShareTarget,
+    Capability, Contact as CloudContact, Conversation as CloudConversation, Entry as CloudEntry, EntryKind, Error as CloudError, Identity,
+    MailMessage, Notification, Permission, Result as CloudResult, Share as CloudShare, ShareOptions, ShareTarget,
 };
 
 use crate::http::{Http, Method};
@@ -411,14 +411,25 @@ impl<H: Http> Nextcloud<H> {
     ///
     /// A server that will not answer is treated as allowing nothing, so the
     /// failure is a missing button rather than one that does not work.
-    fn sharing_capabilities(&self) -> Vec<Capability> {
+    /// What this instance reports about itself.
+    ///
+    /// One call, because the capabilities endpoint answers for every app
+    /// at once. Nothing here is assumed. An administrator can turn public
+    /// links off or never install Talk, and the dialog has to follow.
+    fn instance_capabilities(&self) -> Vec<Capability> {
         let url = format!("{}/ocs/v2.php/cloud/capabilities", self.account.base().trim_end_matches('/'));
         let req = self.account.request(Method::Get, url).header("accept", "application/json");
         let Ok(resp) = send(&self.http, req) else { return Vec::new() };
         let Ok(body) = serde_json::from_slice::<serde_json::Value>(&resp.body) else { return Vec::new() };
-        let Some(sharing) = body.pointer("/ocs/data/capabilities/files_sharing") else { return Vec::new() };
+        let Some(all) = body.pointer("/ocs/data/capabilities") else { return Vec::new() };
 
         let mut out = Vec::new();
+        // Talk, which Nextcloud ships as the `spreed` app. Absent on an
+        // instance that never installed it.
+        if all.get("spreed").is_some() {
+            out.push(Capability::Conversation);
+        }
+        let Some(sharing) = all.get("files_sharing") else { return out };
         let public = sharing.get("public");
         let enabled = public.and_then(|p| p.get("enabled")).and_then(serde_json::Value::as_bool).unwrap_or(false);
         if enabled {
@@ -434,6 +445,37 @@ impl<H: Http> Nextcloud<H> {
             }
         }
         out
+    }
+}
+
+/// Talk, keyed on the file id.
+///
+/// Nextcloud keys a file's conversation on the id and not the path. That is
+/// what makes a rename harmless. Two people pressing the control land in the
+/// same room, and they keep landing there after somebody moves the document.
+impl<H: Http> craft_cloud::Conversations for Nextcloud<H> {
+    fn conversation_name(&self) -> Option<String> {
+        Some("Talk".to_owned())
+    }
+
+    fn conversation(&self, id: &str, _title: &str) -> CloudResult<CloudConversation> {
+        let file_id = craft_cloud::Files::stat(self, id)?.room;
+        if file_id.is_empty() || !file_id.chars().all(|c| c.is_ascii_digit()) {
+            // Without a file id there is nothing stable to key a room on, and a
+            // room keyed on a path splits in two the moment somebody renames.
+            return Err(CloudError::Unsupported("conversations for this entry"));
+        }
+        let base = self.account.base().trim_end_matches('/').to_owned();
+        let url = format!("{base}/ocs/v2.php/apps/spreed/api/v1/file/{file_id}");
+        let req = self.account.request(Method::Get, url).header("accept", "application/json");
+        let resp = send(&self.http, req).map_err(lift)?;
+        let body = serde_json::from_slice::<serde_json::Value>(&resp.body).map_err(|e| CloudError::malformed("talk conversation", e.to_string()))?;
+        let token = body
+            .pointer("/ocs/data/token")
+            .and_then(serde_json::Value::as_str)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| CloudError::malformed("talk conversation", "the answer carried no room token"))?;
+        Ok(CloudConversation { url: format!("{base}/call/{token}"), name: "Talk".to_owned() })
     }
 }
 
@@ -457,7 +499,7 @@ impl<H: Http> craft_cloud::Provider for Nextcloud<H> {
             // separate from sending arbitrary mail, which is the Mail app.
             Capability::ShareNotify,
         ];
-        out.extend(self.sharing_capabilities());
+        out.extend(self.instance_capabilities());
         out
     }
 }

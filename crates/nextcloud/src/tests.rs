@@ -527,3 +527,128 @@ fn malformed_xml_is_an_error_not_a_panic() {
 fn escape_covers_the_five_characters() {
     assert_eq!(crate::xml::escape("a<b>&c\"d'e"), "a&lt;b&gt;&amp;c&quot;d&apos;e");
 }
+
+// ---- working together -------------------------------------------------------
+
+/// The provider owns its transport, so a test that inspects what was asked
+/// needs a shared handle to the same one.
+impl Http for std::rc::Rc<Fake> {
+    type Error = String;
+
+    fn send(&self, req: Request) -> Result<Response, String> {
+        Fake::send(self, req)
+    }
+}
+
+/// One entry, answered at Depth 0, the way `stat` asks for it.
+fn one_entry(file_id: Option<&str>) -> String {
+    let id = match file_id {
+        Some(id) => format!("      <oc:fileid>{id}</oc:fileid>\n"),
+        None => String::new(),
+    };
+    format!(
+        r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns">
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/Documents/Plan.docx</d:href>
+    <d:propstat><d:prop>
+      <d:resourcetype/>
+      <d:getcontentlength>2048</d:getcontentlength>
+      <d:getetag>"abc"</d:getetag>
+{id}    </d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat>
+  </d:response>
+</d:multistatus>"#
+    )
+}
+
+#[test]
+fn a_file_conversation_is_the_call_url_for_the_rooms_token() {
+    use craft_cloud::Conversations as _;
+
+    let http = Fake::new(vec![
+        Response::new(207, one_entry(Some("12345")).into_bytes()),
+        Response::new(200, br#"{"ocs":{"data":{"token":"n3wr00m"}}}"#.to_vec()),
+    ]);
+    let cloud = crate::Nextcloud::new(acct(), http);
+    let found = cloud.conversation("/Documents/Plan.docx", "Plan").expect("a room");
+
+    assert_eq!(found.url, "https://cloud.example.net/call/n3wr00m");
+    assert_eq!(found.name, "Talk");
+}
+
+#[test]
+fn a_conversation_is_asked_for_by_file_id_so_a_rename_keeps_the_room() {
+    use craft_cloud::Conversations as _;
+
+    let http = std::rc::Rc::new(Fake::new(vec![
+        Response::new(207, one_entry(Some("12345")).into_bytes()),
+        Response::new(200, br#"{"ocs":{"data":{"token":"t"}}}"#.to_vec()),
+    ]));
+    let cloud = crate::Nextcloud::new(acct(), std::rc::Rc::clone(&http));
+    let _ = cloud.conversation("/Documents/Plan.docx", "Plan");
+
+    // The path is nowhere in the request. That is the whole point: a room keyed
+    // on a path splits in two the moment somebody renames the document.
+    let asked = http.last().url.clone();
+    assert!(asked.ends_with("/ocs/v2.php/apps/spreed/api/v1/file/12345"), "asked {asked}");
+    assert!(!asked.contains("Plan.docx"), "the path must not key the room, asked {asked}");
+}
+
+#[test]
+fn an_entry_with_no_file_id_has_nowhere_stable_to_key_a_room() {
+    use craft_cloud::Conversations as _;
+
+    let http = Fake::new(vec![Response::new(207, one_entry(None).into_bytes())]);
+    let cloud = crate::Nextcloud::new(acct(), http);
+    let refused = cloud.conversation("/Documents/Plan.docx", "Plan");
+
+    assert!(matches!(refused, Err(craft_cloud::Error::Unsupported(_))), "a server that omits the file id offers no conversation, got {refused:?}");
+}
+
+#[test]
+fn an_answer_carrying_no_token_is_reported_as_malformed() {
+    use craft_cloud::Conversations as _;
+
+    let http = Fake::new(vec![Response::new(207, one_entry(Some("12345")).into_bytes()), Response::new(200, br#"{"ocs":{"data":{}}}"#.to_vec())]);
+    let cloud = crate::Nextcloud::new(acct(), http);
+    let broken = cloud.conversation("/Documents/Plan.docx", "Plan");
+
+    assert!(matches!(broken, Err(craft_cloud::Error::Malformed { .. })), "an answer with no room token is not a usable room, got {broken:?}");
+}
+
+#[test]
+fn talk_is_reported_only_on_an_instance_that_has_it() {
+    use craft_cloud::Provider as _;
+
+    let with = Fake::one(200, r#"{"ocs":{"data":{"capabilities":{"spreed":{"features":[]}}}}}"#);
+    let cloud = crate::Nextcloud::new(acct(), with);
+    assert!(cloud.capabilities().contains(&craft_cloud::Capability::Conversation));
+
+    let without = Fake::one(200, r#"{"ocs":{"data":{"capabilities":{"files_sharing":{}}}}}"#);
+    let cloud = crate::Nextcloud::new(acct(), without);
+    assert!(!cloud.capabilities().contains(&craft_cloud::Capability::Conversation), "an instance without Talk must not offer to use it");
+}
+
+#[test]
+fn sharing_is_still_read_from_an_instance_that_has_no_talk() {
+    use craft_cloud::Provider as _;
+
+    let http = Fake::one(200, r#"{"ocs":{"data":{"capabilities":{"files_sharing":{"public":{"enabled":true}}}}}}"#);
+    let cloud = crate::Nextcloud::new(acct(), http);
+    let found = cloud.capabilities();
+
+    // Reading the two out of one answer must not let either hide the other.
+    assert!(found.contains(&craft_cloud::Capability::LinkShares));
+    assert!(!found.contains(&craft_cloud::Capability::Conversation));
+}
+
+#[test]
+fn a_provider_with_no_conversations_says_so_without_being_asked_twice() {
+    use craft_cloud::Conversations as _;
+
+    struct Bare;
+    impl craft_cloud::Conversations for Bare {}
+
+    assert_eq!(Bare.conversation_name(), None, "nothing to call a feature it does not have");
+    assert!(matches!(Bare.conversation("1", "x"), Err(craft_cloud::Error::Unsupported(_))));
+}
