@@ -54,22 +54,78 @@ impl Peer {
     }
 }
 
-/// A stable colour for an identifier.
+/// How many colours the wheel carries.
 ///
-/// Public because the badge is not the only thing that needs it. A remote
-/// cursor drawn in a different colour from the badge above it reads as two
-/// different people.
-pub fn colour_for(id: &str) -> Color32 {
-    // FNV-1a, which is small, has no dependency and spreads short strings well
-    // enough to keep neighbouring session ids apart.
+/// Sixteen, spaced evenly. More than that and neighbouring slots stop being
+/// distinguishable, which defeats the point of having them.
+pub const SLOTS: usize = 16;
+
+/// The colour in one slot of the wheel.
+pub fn slot(index: usize) -> Color32 {
+    let step = 360.0 / SLOTS as f32;
+    // Alternate the lightness as the wheel turns, so two neighbouring hues are
+    // also two different weights. Hue alone is not enough for anybody who sees
+    // colour differently from the person who chose it.
+    let dim = index % 2 == 1;
+    hsv((index % SLOTS) as f32 * step, if dim { 0.66 } else { 0.52 }, if dim { 0.68 } else { 0.84 })
+}
+
+/// Which slot an identifier would like.
+fn preferred(id: &str) -> usize {
+    // FNV-1a, which is small and has no dependency.
     let mut hash: u32 = 0x811c_9dc5;
     for byte in id.as_bytes() {
         hash ^= u32::from(*byte);
         hash = hash.wrapping_mul(0x0100_0193);
     }
-    // A fixed saturation and value, so every badge carries the same weight and
-    // no peer ends up with a colour that cannot hold white text.
-    hsv(f32::from(u16::try_from(hash % 360).unwrap_or(0)), 0.58, 0.80)
+    // Then an avalanche. FNV alone leaves keys that differ in one byte close
+    // together, and session ids from one relay run in sequence.
+    hash ^= hash >> 16;
+    hash = hash.wrapping_mul(0x7feb_352d);
+    hash ^= hash >> 15;
+    hash = hash.wrapping_mul(0x846c_a68b);
+    hash ^= hash >> 16;
+    hash as usize % SLOTS
+}
+
+/// A stable colour for one identifier, with nobody else to consider.
+///
+/// Public because the badge is not the only thing that needs it. Use
+/// [`colours_for`] wherever a whole room is on screen. This one cannot promise
+/// anything about the other people in it.
+pub fn colour_for(id: &str) -> Color32 {
+    slot(preferred(id))
+}
+
+/// Colours for a whole room, every one distinguishable from the others.
+///
+/// Each peer prefers the slot its identifier hashes to. A peer whose slot is
+/// already taken moves to the next free one, walking the list in a fixed order
+/// so the answer does not depend on who connected first.
+///
+/// A document drawing remote cursors calls this with the same identifiers and
+/// gets the same answer, which is what makes a cursor and the badge above it
+/// the same person. Beyond [`SLOTS`] peers the wheel repeats, since there is
+/// no seventeenth colour anybody could tell from the first sixteen.
+pub fn colours_for(ids: &[String]) -> Vec<Color32> {
+    let mut order: Vec<usize> = (0..ids.len()).collect();
+    order.sort_by(|a, b| ids[*a].cmp(&ids[*b]));
+
+    let mut taken = [false; SLOTS];
+    let mut out = vec![Color32::BLACK; ids.len()];
+    for position in order {
+        let want = preferred(&ids[position]);
+        let mut at = want;
+        for step in 0..SLOTS {
+            at = (want + step) % SLOTS;
+            if !taken[at] {
+                break;
+            }
+        }
+        taken[at] = true;
+        out[position] = slot(at);
+    }
+    out
 }
 
 fn hsv(hue: f32, saturation: f32, value: f32) -> Color32 {
@@ -214,8 +270,11 @@ impl PresenceBar {
                     badge.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, more.as_str()));
                     badge.on_hover_text(self.peers.iter().skip(self.shown).map(|p| p.display.as_str()).collect::<Vec<_>>().join("\n"));
                 }
-                for peer in self.peers.iter().take(self.shown).rev() {
-                    let hit = badge(ui, &peer.initial(), peer.colour(), Color32::WHITE);
+                let ids: Vec<String> = self.peers.iter().map(|p| p.id.clone()).collect();
+                let colours = colours_for(&ids);
+                for (at, peer) in self.peers.iter().enumerate().take(self.shown).rev() {
+                    let ink = colours.get(at).copied().unwrap_or_else(|| peer.colour());
+                    let hit = badge(ui, &peer.initial(), ink, Color32::WHITE);
                     let name = peer.display.clone();
                     hit.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name.as_str()));
                     let tip = match &peer.at {
@@ -256,11 +315,54 @@ mod tests {
         assert_eq!(colour_for("session-a"), colour_for("session-a"));
     }
 
+    /// How far apart two colours are, summed over the channels. Crude, and
+    /// enough to tell "two different oranges" from "orange and teal".
+    fn apart(a: Color32, b: Color32) -> i32 {
+        (i32::from(a.r()) - i32::from(b.r())).abs() + (i32::from(a.g()) - i32::from(b.g())).abs() + (i32::from(a.b()) - i32::from(b.b())).abs()
+    }
+
+    fn ids(of: &[&str]) -> Vec<String> {
+        of.iter().map(|s| (*s).to_owned()).collect()
+    }
+
     #[test]
-    fn two_peers_do_not_share_a_colour() {
-        let a = colour_for("session-a");
-        let b = colour_for("session-b");
-        assert_ne!(a, b, "neighbouring session ids must not land on one colour");
+    fn a_room_of_sequential_ids_is_a_room_of_distinguishable_colours() {
+        // The shape a relay actually hands out. A colour derived from one id
+        // alone cannot promise this, which is how six people came out looking
+        // like two.
+        let room = ids(&["s1", "s2", "s3", "s4", "s5", "s6"]);
+        let colours = colours_for(&room);
+        for (i, a) in colours.iter().enumerate() {
+            for (j, b) in colours.iter().enumerate().skip(i + 1) {
+                let distance = apart(*a, *b);
+                assert!(distance >= 60, "{} and {} are {distance} apart", room[i], room[j]);
+            }
+        }
+    }
+
+    #[test]
+    fn a_full_wheel_is_still_all_distinct() {
+        let room: Vec<String> = (0..SLOTS).map(|n| format!("session-{n}")).collect();
+        let colours = colours_for(&room);
+        for (i, a) in colours.iter().enumerate() {
+            for (j, b) in colours.iter().enumerate().skip(i + 1) {
+                assert!(apart(*a, *b) > 0, "{} and {} share a colour", room[i], room[j]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_same_room_always_gets_the_same_colours() {
+        let room = ids(&["b", "a", "c"]);
+        assert_eq!(colours_for(&room), colours_for(&room));
+    }
+
+    #[test]
+    fn the_answer_does_not_depend_on_who_connected_first() {
+        let one = colours_for(&ids(&["a", "b", "c"]));
+        let other = colours_for(&ids(&["c", "b", "a"]));
+        // Same people, listed backwards. Each still gets the colour it had.
+        assert_eq!(one, other.into_iter().rev().collect::<Vec<_>>());
     }
 
     #[test]
