@@ -218,6 +218,29 @@ impl Client {
         Err(Error::Refused { code: "expired".into(), detail: "the sign-in timed out".into() })
     }
 
+    /// End this session at the service.
+    ///
+    /// A client that only dropped its own copy of the token would leave a
+    /// usable session behind the moment somebody had copied it. This asks the
+    /// service to drop the record, which stops the token working anywhere.
+    ///
+    /// A refused call keeps the token, so a caller can try again rather than
+    /// walk away from a session that is still alive. A session the service has
+    /// already forgotten is the outcome that was asked for.
+    pub fn sign_out(&mut self) -> Result<()> {
+        match self.post_json("/auth/logout", &()) {
+            Ok(_) => {
+                self.token = None;
+                Ok(())
+            }
+            Err(Error::Unauthenticated) => {
+                self.token = None;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     // ---- linking a cloud account ------------------------------------------
 
     pub fn link_start(&self) -> Result<LinkStart> {
