@@ -21,6 +21,7 @@ craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-runtime = { path = "crates/runtime" }
 craft-settings = { path = "crates/settings" }
+craft-suite-account = { path = "crates/suite-account" }
 craft-tier-store = { path = "crates/tier-store" }
 craft-ui = { path = "crates/ui" }
 craft-worker-host = { path = "crates/worker-host" }
