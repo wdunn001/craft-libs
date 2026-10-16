@@ -585,6 +585,7 @@ name = "craft-ui"
 version = "0.1.0"
 dependencies = [
  "craft-cloud",
+ "craft-esign",
  "egui",
  "egui_extras",
  "egui_kittest",
