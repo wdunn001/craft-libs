@@ -14,6 +14,7 @@ repository = "https://github.com/storytold/craft-libs"
 craft-atomic = { path = "crates/atomic" }
 craft-cms = { path = "crates/cms" }
 craft-cloud = { path = "crates/cloud" }
+craft-esign = { path = "crates/esign" }
 craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }
