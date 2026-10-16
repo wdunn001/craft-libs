@@ -161,6 +161,10 @@ impl Default for EsignDialog {
 }
 
 impl EsignDialog {
+    pub fn new() -> EsignDialog {
+        EsignDialog::default()
+    }
+
     pub fn labels(mut self, labels: EsignLabels) -> EsignDialog {
         self.labels = labels;
         self
@@ -213,6 +217,12 @@ impl EsignDialog {
     /// What Send asked the application to encode and submit, if anything.
     pub fn take_send_request(&mut self) -> Option<SendRequest> {
         self.send_out.take()
+    }
+
+    /// Submit a request through the host backend (for example after the app
+    /// encoded document bytes for a [`SendRequest`]).
+    pub fn submit_request(&mut self, request: Request) {
+        let _ = self.submit(request);
     }
 
     /// Completed document bytes after a successful download request.
