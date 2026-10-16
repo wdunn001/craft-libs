@@ -16,22 +16,14 @@
 //! [`craft_cloud::Provider`] or [`craft_cloud::Capability`]. Signing is not
 //! file access, and a signer role is not a share permission.
 
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unimplemented,
-    clippy::todo,
-    clippy::unreachable
-)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod error;
 mod types;
 
 pub use error::{Error, Result};
 pub use types::{
-    CompletedDocument, Envelope, EnvelopeDraft, EnvelopeEvent, EnvelopeStatus, EsignCapability, FieldPlacement, Recipient,
-    RecipientStatus,
+    CompletedDocument, Envelope, EnvelopeDraft, EnvelopeEvent, EnvelopeStatus, EsignCapability, FieldPlacement, Recipient, RecipientStatus,
 };
 
 /// Creating and driving envelopes.
@@ -155,10 +147,7 @@ mod tests {
         let s = RefuseAll;
         assert!(matches!(s.void("e", "x"), Err(Error::Unsupported("void"))));
         assert!(matches!(s.remind("e", "r"), Err(Error::Unsupported("reminders"))));
-        assert!(matches!(
-            s.signing_url("e", "r", "https://example"),
-            Err(Error::Unsupported("embedded signing"))
-        ));
+        assert!(matches!(s.signing_url("e", "r", "https://example"), Err(Error::Unsupported("embedded signing"))));
         assert!(!s.supports(EsignCapability::Envelopes));
         assert_eq!(s.responsible_party(), "nobody");
     }
@@ -168,12 +157,7 @@ mod tests {
         let draft = EnvelopeDraft {
             title: "NDA".into(),
             message: Some("please sign".into()),
-            sender: Identity {
-                id: "u1".into(),
-                display: "Ada".into(),
-                email: Some("ada@example.com".into()),
-                avatar: None,
-            },
+            sender: Identity { id: "u1".into(), display: "Ada".into(), email: Some("ada@example.com".into()), avatar: None },
             document_id: Some("doc-1".into()),
             document_etag: Some("\"abc\"".into()),
             recipients: vec![Recipient {

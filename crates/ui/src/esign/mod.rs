@@ -303,9 +303,7 @@ impl EsignDialog {
             }
         }
 
-        if self.backend.is_some()
-            && (self.capabilities.is_none() || (now - self.asked_caps_at) > RETRY && !self.available())
-        {
+        if self.backend.is_some() && (self.capabilities.is_none() || (now - self.asked_caps_at) > RETRY && !self.available()) {
             self.asked_caps_at = now;
             let _ = self.submit(Request::Capabilities);
             // A synchronous test backend answers before submit returns; drain once more.
@@ -341,14 +339,7 @@ impl EsignDialog {
             return;
         }
         let role = format!("Signer {}", self.recipients.len() + 1);
-        self.recipients.push(Recipient {
-            id: contact.id,
-            name: contact.name,
-            email,
-            role,
-            required: true,
-            status: RecipientStatus::Pending,
-        });
+        self.recipients.push(Recipient { id: contact.id, name: contact.name, email, role, required: true, status: RecipientStatus::Pending });
         self.query.clear();
         self.matches.clear();
     }
@@ -362,14 +353,7 @@ impl EsignDialog {
             return;
         }
         let role = format!("Signer {}", self.recipients.len() + 1);
-        self.recipients.push(Recipient {
-            id: email.clone(),
-            name: email.clone(),
-            email,
-            role,
-            required: true,
-            status: RecipientStatus::Pending,
-        });
+        self.recipients.push(Recipient { id: email.clone(), name: email.clone(), email, role, required: true, status: RecipientStatus::Pending });
         self.query.clear();
         self.matches.clear();
     }
@@ -388,22 +372,10 @@ impl EsignDialog {
             return;
         }
         let draft = EnvelopeDraft {
-            title: if self.document_title.is_empty() {
-                "Document".into()
-            } else {
-                self.document_title.clone()
-            },
-            message: if self.message.trim().is_empty() {
-                None
-            } else {
-                Some(self.message.clone())
-            },
+            title: if self.document_title.is_empty() { "Document".into() } else { self.document_title.clone() },
+            message: if self.message.trim().is_empty() { None } else { Some(self.message.clone()) },
             sender,
-            document_id: if self.document_id.is_empty() {
-                None
-            } else {
-                Some(self.document_id.clone())
-            },
+            document_id: if self.document_id.is_empty() { None } else { Some(self.document_id.clone()) },
             document_etag: self.document_etag.clone(),
             recipients: self.recipients.clone(),
             placements: self.placements.clone(),
@@ -429,13 +401,9 @@ impl EsignDialog {
 
         let mut open = self.open;
         let labels = self.labels.clone();
-        egui::Window::new(&labels.title)
-            .open(&mut open)
-            .resizable(true)
-            .default_width(420.0)
-            .show(ctx, |ui| {
-                self.ui(ui);
-            });
+        egui::Window::new(&labels.title).open(&mut open).resizable(true).default_width(420.0).show(ctx, |ui| {
+            self.ui(ui);
+        });
         self.open = open;
     }
 
@@ -446,11 +414,7 @@ impl EsignDialog {
         }
 
         if !self.available() {
-            ui.label(if self.capabilities.is_none() {
-                self.labels.loading.as_str()
-            } else {
-                self.labels.no_service.as_str()
-            });
+            ui.label(if self.capabilities.is_none() { self.labels.loading.as_str() } else { self.labels.no_service.as_str() });
             return;
         }
 
@@ -519,8 +483,7 @@ impl EsignDialog {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let can_send = !self.busy && self.linked && !self.recipients.is_empty();
-            if ui.add_enabled(can_send, egui::Button::new(if self.busy { &self.labels.sending } else { &self.labels.send })).clicked()
-            {
+            if ui.add_enabled(can_send, egui::Button::new(if self.busy { &self.labels.sending } else { &self.labels.send })).clicked() {
                 self.queue_send();
             }
             if ui.button(&self.labels.close).clicked() {
@@ -538,9 +501,7 @@ impl EsignDialog {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let caps = self.capabilities.clone().unwrap_or_default();
-            if caps.contains(&EsignCapability::Reminders)
-                && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.remind)).clicked()
-            {
+            if caps.contains(&EsignCapability::Reminders) && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.remind)).clicked() {
                 if let Some(r) = env.recipients.iter().find(|r| r.status == RecipientStatus::Pending) {
                     self.busy = true;
                     let _ = self.submit(Request::Remind { envelope: env.id.clone(), recipient: r.id.clone() });
@@ -553,9 +514,7 @@ impl EsignDialog {
                 self.busy = true;
                 let _ = self.submit(Request::Void { envelope: env.id.clone(), reason: "voided by sender".into() });
             }
-            if env.status == EnvelopeStatus::Completed
-                && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.download)).clicked()
-            {
+            if env.status == EnvelopeStatus::Completed && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.download)).clicked() {
                 self.busy = true;
                 let _ = self.submit(Request::Completed { envelope: env.id.clone() });
             }
@@ -618,12 +577,7 @@ mod tests {
     fn send_request_needs_recipient_and_sender() {
         let mut dialog = EsignDialog::default();
         dialog.linked = true;
-        dialog.sender = Some(Identity {
-            id: "u".into(),
-            display: "Ada".into(),
-            email: Some("ada@example.com".into()),
-            avatar: None,
-        });
+        dialog.sender = Some(Identity { id: "u".into(), display: "Ada".into(), email: Some("ada@example.com".into()), avatar: None });
         dialog.queue_send();
         assert!(dialog.take_send_request().is_none());
         dialog.add_email("bob@example.com".into());
