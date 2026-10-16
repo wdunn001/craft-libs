@@ -15,7 +15,7 @@ pub enum Request {
     /// People matching what has been typed so far (cloud contacts).
     Lookup { query: String, limit: usize },
     /// Create a draft from a document snapshot, then optionally send it.
-    Create { draft: EnvelopeDraft, document: Vec<u8>, idempotency_key: String, send: bool },
+    Create { draft: Box<EnvelopeDraft>, document: Vec<u8>, idempotency_key: String, send: bool },
     /// Current status of one envelope.
     Status { envelope: String },
     /// Finished document bytes.

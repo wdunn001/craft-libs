@@ -501,11 +501,12 @@ impl EsignDialog {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             let caps = self.capabilities.clone().unwrap_or_default();
-            if caps.contains(&EsignCapability::Reminders) && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.remind)).clicked() {
-                if let Some(r) = env.recipients.iter().find(|r| r.status == RecipientStatus::Pending) {
-                    self.busy = true;
-                    let _ = self.submit(Request::Remind { envelope: env.id.clone(), recipient: r.id.clone() });
-                }
+            if caps.contains(&EsignCapability::Reminders)
+                && ui.add_enabled(!self.busy, egui::Button::new(&self.labels.remind)).clicked()
+                && let Some(r) = env.recipients.iter().find(|r| r.status == RecipientStatus::Pending)
+            {
+                self.busy = true;
+                let _ = self.submit(Request::Remind { envelope: env.id.clone(), recipient: r.id.clone() });
             }
             if caps.contains(&EsignCapability::Void)
                 && env.status == EnvelopeStatus::Sent
@@ -575,9 +576,11 @@ mod tests {
 
     #[test]
     fn send_request_needs_recipient_and_sender() {
-        let mut dialog = EsignDialog::default();
-        dialog.linked = true;
-        dialog.sender = Some(Identity { id: "u".into(), display: "Ada".into(), email: Some("ada@example.com".into()), avatar: None });
+        let mut dialog = EsignDialog {
+            linked: true,
+            sender: Some(Identity { id: "u".into(), display: "Ada".into(), email: Some("ada@example.com".into()), avatar: None }),
+            ..Default::default()
+        };
         dialog.queue_send();
         assert!(dialog.take_send_request().is_none());
         dialog.add_email("bob@example.com".into());
