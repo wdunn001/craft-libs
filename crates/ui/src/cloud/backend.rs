@@ -64,6 +64,13 @@ pub enum Event {
         uid: u64,
         entry: Result<Entry, Fault>,
     },
+    /// Local encode finished. The pages turn this into a [`Job::Write`] or
+    /// [`Job::Create`]. Encode runs in the application (often off the UI
+    /// thread); the network half stays a host job.
+    Encoded {
+        intent: crate::cloud::SaveIntent,
+        bytes: Result<Vec<u8>, Fault>,
+    },
 }
 
 /// Where a worker's answers go.
