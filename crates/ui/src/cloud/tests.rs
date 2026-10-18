@@ -305,6 +305,8 @@ fn a_save_goes_out_under_the_version_the_document_was_read_at() {
     save(&mut app).unwrap();
     assert_eq!(app.did().encoded, vec![1], "the application alone turns a document into bytes");
     assert_eq!(app.did().encoded_as, vec!["Minutes.note".to_owned()], "the bytes are asked for under the name they are going to");
+    // Encode posts Encoded; the next pump turns it into Job::Write.
+    pumped(&mut app, &ctx);
     let condition = jobs.lock().unwrap().iter().find_map(|j| match j {
         Job::Write { entry, .. } => Some(entry.etag.clone()),
         _ => None,
