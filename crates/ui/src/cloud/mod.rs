@@ -319,6 +319,11 @@ impl CloudFiles {
     pub fn post(&self, event: Event) {
         let _ = self.events.0.send(event);
     }
+
+    /// A clone of the event sender for a worker that finishes encode later.
+    pub fn event_sender(&self) -> Sender<Event> {
+        self.events.0.clone()
+    }
 }
 
 // ---------------------------------------------------------------- asking
