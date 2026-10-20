@@ -176,7 +176,7 @@ fn row_actions<A: CloudApp>(app: &A, ui: &mut Ui, entry: &Entry) -> Option<Strin
         );
     }
     if can(Capability::Conversation) {
-        items.push(crate::menu::MenuItem::new("talk", app.tr("Work together")).detail(app.tr("Open a conversation about this document")));
+        items.push(crate::menu::MenuItem::new("talk", app.tr("Open chat")).detail(app.tr("Open a chat about this document")));
     }
     let labels = crate::menu::MenuLabels { more: app.tr("More options"), ..Default::default() };
     // Salted by the handle. Two rows drawing the same control need two menus,
