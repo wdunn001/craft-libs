@@ -11,7 +11,7 @@
 
 use std::sync::mpsc::Sender;
 
-use craft_cloud::{Capability, Conversation, Entry};
+use craft_cloud::{Capability, ChatMessage, Conversation, Entry};
 
 /// Work for a host's worker. Each one answers with one or more [`Event`].
 pub enum Job {
@@ -35,12 +35,21 @@ pub enum Job {
     SignOut,
     /// Where to go to work together on a document.
     Conversation(String),
+    /// A document conversation's messages. `after` is the newest id already
+    /// held, or `None` on first open. Answered with [`Event::Messages`].
+    Messages { id: String, after: Option<String> },
+    /// Send a message to a document's conversation.
+    PostMessage { id: String, text: String },
 }
 
 /// What a worker reports back.
 pub enum Event {
     /// Where to go to work together, or why there is nowhere.
     Conversation(Result<Conversation, Fault>),
+    /// More messages in the open conversation, oldest first.
+    Messages(Result<Vec<ChatMessage>, Fault>),
+    /// The message just sent, as the provider stored it.
+    Posted(Result<ChatMessage, Fault>),
     Account(Result<Account, Fault>),
     /// A link or a sign-in needs the user's browser. `handle` is polled until
     /// they are done, when the service gave one.

@@ -32,7 +32,8 @@ mod types;
 
 pub use error::{Error, Result};
 pub use types::{
-    Capability, Contact, Conversation, Entry, EntryKind, Identity, MailMessage, Notification, Permission, Share, ShareOptions, ShareTarget,
+    Capability, ChatMessage, Contact, Conversation, Entry, EntryKind, Identity, MailMessage, Notification, Permission, Share, ShareOptions,
+    ShareTarget,
 };
 
 /// Reading and writing documents.
@@ -167,6 +168,26 @@ pub trait Conversations {
     /// Nothing here can attach one account's thread to another's.
     fn conversation(&self, _id: &str, _title: &str) -> Result<Conversation> {
         Err(Error::Unsupported("conversations"))
+    }
+
+    /// The messages in a document's conversation, oldest first.
+    ///
+    /// `after` is the id of the newest message the caller already holds, or
+    /// `None` for the most recent page on first open. A provider that can
+    /// hold a read open does so until a message arrives or a short timeout
+    /// passes, so a caller follows the conversation by asking again with the
+    /// newest id it now has. One that cannot answers at once with what it has.
+    ///
+    /// Keyed on the document `id`, like [`Conversations::conversation`]. The
+    /// provider resolves its own room from that, so no room handle crosses
+    /// this boundary.
+    fn messages(&self, _id: &str, _after: Option<&str>) -> Result<Vec<ChatMessage>> {
+        Err(Error::Unsupported("conversation messages"))
+    }
+
+    /// Send a message to a document's conversation, and return it as stored.
+    fn post_message(&self, _id: &str, _text: &str) -> Result<ChatMessage> {
+        Err(Error::Unsupported("conversation messages"))
     }
 }
 

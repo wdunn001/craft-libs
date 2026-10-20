@@ -159,8 +159,30 @@ pub struct Conversation {
     /// Where to join. Handed to a browser, or to the provider's own app.
     pub url: String,
     /// What the provider calls the feature, for the control's wording. A
-    /// menu item reading "Work together in Talk" is built from this.
+    /// menu item reading "Open chat in Talk" is built from this.
     pub name: String,
+}
+
+/// One message in a document's conversation.
+///
+/// Carries only what a panel draws. The provider's own identifiers for the
+/// room and the account do not appear: a caller addresses the conversation by
+/// the document, and the provider resolves the rest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    /// The provider's id for this message, as a string so it is never parsed.
+    ///
+    /// Ordered by the provider, so the newest id a caller holds is what it
+    /// asks for more after. A later message has a later id.
+    pub id: String,
+    /// Who sent it, named for display as the provider names them.
+    pub author: String,
+    /// The message text, as the provider stored it.
+    pub text: String,
+    /// When it was sent, in seconds since the Unix epoch.
+    pub at: i64,
+    /// Whether this account sent it, so a panel can set it apart.
+    pub mine: bool,
 }
 
 /// A share that exists.

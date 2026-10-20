@@ -35,6 +35,7 @@ use serde_json::{Value as Json, json};
 
 mod app;
 mod backend;
+pub mod chat;
 mod pages;
 #[cfg(test)]
 mod tests;
@@ -206,6 +207,8 @@ pub struct CloudFiles {
     /// Set when this window belongs to somebody who followed a shared link
     /// rather than to somebody signed in.
     guest: Option<Guest>,
+    /// The in-app chat for the open document's conversation.
+    pub chat: chat::ChatPanel,
 }
 
 impl Default for CloudFiles {
@@ -235,6 +238,7 @@ impl CloudFiles {
             status: None,
             sharing_save: false,
             guest: None,
+            chat: chat::ChatPanel::default(),
         }
     }
 
@@ -583,9 +587,11 @@ pub fn pump<A: CloudApp>(app: &mut A, ctx: &egui::Context) {
         apply(app, event);
     }
     poll_link(app);
+    let now = app.cloud().clock;
+    chat::poll(app, now);
     // A worker answering is not a local event. Without this the progress line
     // would sit frozen until the user moved the mouse.
-    if app.cloud().busy.is_some() || matches!(app.cloud().link, Some(Link::Starting | Link::Waiting { .. })) {
+    if app.cloud().busy.is_some() || app.cloud().chat.is_open() || matches!(app.cloud().link, Some(Link::Starting | Link::Waiting { .. })) {
         ctx.request_repaint_after(Duration::from_millis(120));
     }
 }
@@ -627,6 +633,8 @@ fn apply<A: CloudApp>(app: &mut A, event: Event) {
             let text = fault.text(noun);
             app.cloud_mut().status = Some(text);
         }
+        Event::Messages(result) => app.cloud_mut().chat.received(result, noun),
+        Event::Posted(result) => app.cloud_mut().chat.posted(result, noun),
         Event::Browser { url, handle } => {
             app.open_url(&url);
             let next_poll = app.cloud().clock + LINK_POLL;
