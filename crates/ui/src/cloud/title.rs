@@ -6,7 +6,7 @@
 
 use egui::{RichText, Ui};
 
-use super::{CloudApp, CopyFormat, Guest, available, fill, link, origin, sign_in, sign_out};
+use super::{CloudApp, CopyFormat, Guest, available, fill, link, origin, sign_in, sign_out, work_together};
 
 /// Who this window is for. Who else is in the document, beside them.
 ///
@@ -142,7 +142,7 @@ pub fn share_button<A: CloudApp>(app: &mut A, ui: &mut Ui, copies: &[CopyFormat]
             None
         }
         crate::menu::SplitHit::Item(what) if what == "talk" => {
-            super::chat::open_chat(app);
+            work_together(app);
             None
         }
         crate::menu::SplitHit::Item(format) => Some(format),
