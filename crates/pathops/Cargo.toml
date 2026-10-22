@@ -1,0 +1,21 @@
+[package]
+name = "craft-pathops"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Craft path operations: booleans, shape-builder regions, offset, outline stroke, simplify"
+
+[lints]
+workspace = true
+
+[dependencies]
+craft-geom = { workspace = true }
+kurbo = { workspace = true }
+thiserror = { workspace = true }
+linesweeper = { workspace = true }
+
+[dev-dependencies]
+craft-testkit = { workspace = true }
+proptest = { workspace = true }

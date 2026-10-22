@@ -18,8 +18,16 @@ craft-print = { path = "crates/print" }
 craft-quit = { path = "crates/quit" }
 craft-settings = { path = "crates/settings" }
 craft-ui = { path = "crates/ui" }
+craft-geom = { path = "crates/geom" }
+craft-pathops = { path = "crates/pathops" }
+craft-trace = { path = "crates/trace" }
+craft-testkit = { path = "crates/testkit" }
 egui = { version = "0.36", default-features = false }
 rayon = "1"
+kurbo = { version = "0.13", features = ["serde"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "bmp", "tga"] }
+linesweeper = "0.5"
+proptest = "1"
 
 # Foundation crates. The versions match the ones the app repos already pin.
 serde = { version = "1", features = ["derive"] }
