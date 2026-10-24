@@ -322,6 +322,20 @@ pub fn start<A: CloudApp>(app: &mut A) {
     }
 }
 
+/// Ask who is signed in again after a fault. File › Open's places rail uses this
+/// for Try again; the pages themselves set the same fields because they live here.
+pub fn retry_account<A: CloudApp>(app: &mut A) {
+    if !available(app) {
+        return;
+    }
+    {
+        let cloud = app.cloud_mut();
+        cloud.account_fault = None;
+        cloud.asked_account = false;
+    }
+    start(app);
+}
+
 /// Begins signing in to the service.
 ///
 /// A worker signs in before any job it is given, so asking who the account is

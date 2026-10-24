@@ -16,6 +16,7 @@ pub mod esign;
 pub mod icons;
 pub mod layout;
 pub mod menu;
+pub mod places;
 pub mod presence;
 pub mod printing;
 #[cfg(feature = "share")]
