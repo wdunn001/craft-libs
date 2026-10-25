@@ -264,4 +264,19 @@ pub trait CloudApp {
     fn style(&self, ui: &Ui) -> CloudStyle {
         CloudStyle::from_visuals(ui.visuals())
     }
+
+    /// Recent documents this application knows, as paths. File › Open lists
+    /// them in the Recent place. Empty when the application has none yet.
+    fn recents(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Open one of [`CloudApp::recents`].
+    fn open_recent(&mut self, _path: &str) {}
+
+    /// Show the system's own file dialog. File › Open's This computer place
+    /// and its Browse control both call this. Cloud folders the operating
+    /// system already knows sit in that dialog; this crate does not discover
+    /// vendor synced folders.
+    fn browse_local(&mut self) {}
 }

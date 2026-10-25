@@ -106,10 +106,17 @@ pub struct Origin {
 /// What the pages are waiting for. Drawn as progress while they wait.
 #[derive(Clone, Debug)]
 pub enum Busy {
-    Opening { name: String },
+    Opening {
+        name: String,
+    },
     /// The application is turning the open document into bytes.
-    Encoding { name: String },
-    Saving { name: String, bytes: usize },
+    Encoding {
+        name: String,
+    },
+    Saving {
+        name: String,
+        bytes: usize,
+    },
 }
 
 impl Busy {
@@ -232,6 +239,9 @@ pub struct CloudFiles {
     /// Set when this window belongs to somebody who followed a shared link
     /// rather than to somebody signed in.
     guest: Option<Guest>,
+    /// File › Open: which place in the rail is chosen. 1 is the cloud account
+    /// when a service is wired, which is the live site's usual case.
+    pub open_place: usize,
 }
 
 impl Default for CloudFiles {
@@ -261,6 +271,7 @@ impl CloudFiles {
             status: None,
             sharing_save: false,
             guest: None,
+            open_place: 1,
         }
     }
 
@@ -586,12 +597,7 @@ pub fn save<A: CloudApp>(app: &mut A) -> Result<Json, String> {
     let name = origin.entry.name.clone();
     let mime = origin.entry.mime.clone();
     let etag = origin.entry.etag.clone();
-    let intent = SaveIntent {
-        uid,
-        name: name.clone(),
-        mime,
-        kind: SaveKind::Write { entry: origin.entry },
-    };
+    let intent = SaveIntent { uid, name: name.clone(), mime, kind: SaveKind::Write { entry: origin.entry } };
     let cloud = app.cloud_mut();
     cloud.status = None;
     cloud.busy = Some(Busy::Encoding { name: name.clone() });
@@ -616,12 +622,7 @@ pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Jso
     }
     // A document that does not exist yet has no content type to read. The
     // name a person just typed is the whole of what was asked for.
-    let intent = SaveIntent {
-        uid,
-        name: name.clone(),
-        mime: None,
-        kind: SaveKind::Create { folder: folder.to_owned() },
-    };
+    let intent = SaveIntent { uid, name: name.clone(), mime: None, kind: SaveKind::Create { folder: folder.to_owned() } };
     let cloud = app.cloud_mut();
     cloud.status = None;
     cloud.busy = Some(Busy::Encoding { name: name.clone() });
@@ -768,9 +769,7 @@ fn apply<A: CloudApp>(app: &mut A, event: Event) {
                 app.cloud_mut().busy = Some(Busy::Saving { name: name.clone(), bytes: size });
                 match intent.kind {
                     SaveKind::Write { entry } => submit(app, Job::Write { uid: intent.uid, entry, bytes }),
-                    SaveKind::Create { folder } => {
-                        submit(app, Job::Create { uid: intent.uid, folder, name: intent.name, bytes })
-                    }
+                    SaveKind::Create { folder } => submit(app, Job::Create { uid: intent.uid, folder, name: intent.name, bytes }),
                 }
             }
             Err(fault) => {
