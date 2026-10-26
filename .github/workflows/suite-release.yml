@@ -1,0 +1,76 @@
+name: Suite release
+
+# Dispatches each app's Release workflow on the suite branch after applying
+# pins.toml. Signing secrets stay empty on purpose: those jobs skip notarization
+# unless the workflow is running from the `release` branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override for a test run (empty: each app Cargo.toml)"
+        type: string
+        default: ""
+      apps:
+        description: "Comma-separated app list (empty: pins.toml [apps].names)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: suite-release
+  cancel-in-progress: false
+
+jobs:
+  apps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      names: ${{ steps.list.outputs.names }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: list
+        env:
+          APPS: ${{ inputs.apps }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, tomllib
+          raw = os.environ.get("APPS", "").strip()
+          if raw:
+              names = [n.strip() for n in raw.split(",") if n.strip()]
+          else:
+              pins = tomllib.load(open("pins.toml", "rb"))
+              names = list(pins["apps"]["names"])
+          print(len(names), "apps")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write("names=" + json.dumps(names) + "\n")
+          PY
+
+  dispatch:
+    needs: apps
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJson(needs.apps.outputs.names) }}
+    steps:
+      - name: Dispatch ${{ matrix.app }} release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP: ${{ matrix.app }}
+          VERSION: ${{ inputs.version }}
+          BRANCH: quasarke
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          args=(--repo "$OWNER/$APP" --ref "$BRANCH")
+          if [ -n "$VERSION" ]; then
+            args+=(-f "version=$VERSION")
+          fi
+          gh workflow run release.yml "${args[@]}"
+          echo "dispatched $OWNER/$APP release.yml on $BRANCH"

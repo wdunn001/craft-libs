@@ -1,0 +1,59 @@
+# Single source of truth for git crate URLs used by every Craft app.
+# Edit this file, then run scripts/apply-craft-pins.py in an app checkout
+# (or let .github/workflows/suite-release.yml do it before the build).
+#
+# Cargo still records the resolved commit in Cargo.lock. The branch here is
+# what stops us from hand-editing twelve Cargo.toml files when the pin moves.
+
+[suite]
+branch = "quasarke"
+github_owner = "wdunn001"
+pins_repo = "wdunn001/craft-libs"
+
+[sources.craft-libs]
+git = "https://github.com/wdunn001/craft-libs"
+branch = "quasarke"
+
+[sources.collab-craft]
+git = "https://github.com/wdunn001/collab-craft"
+branch = "quasarke"
+
+[crates]
+craft-ui = "craft-libs"
+craft-cloud = "craft-libs"
+craft-crdt = "craft-libs"
+craft-esign = "craft-libs"
+craft-window = "craft-libs"
+craft-update = "craft-libs"
+craft-pdf = "craft-libs"
+craft-print = "craft-libs"
+craft-docpath = "craft-libs"
+craft-quit = "craft-libs"
+craft-runtime = "craft-libs"
+craft-suite-account = "craft-libs"
+krilla = "craft-libs"
+hayro-syntax = "craft-libs"
+craft-collab = "collab-craft"
+craft-cloud-client = "collab-craft"
+collabcraft-share = "collab-craft"
+
+[apps]
+# Repos whose GitHub Actions release.yml the suite workflow dispatches.
+names = [
+  "photocraft",
+  "vectorcraft",
+  "filmcraft",
+  "lightcraft",
+  "pdfcraft",
+  "effectcraft",
+  "designcraft",
+  "cadcraft",
+  "wordcraft",
+  "gridcraft",
+  "deckcraft",
+  "soundcraft",
+  "figcraft",
+  "craft-launcher",
+  "solidcraft",
+  "lasercraft",
+]
