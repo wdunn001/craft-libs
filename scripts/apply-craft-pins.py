@@ -28,6 +28,11 @@ GIT_FIELD = re.compile(r'git\s*=\s*"[^"]*"')
 REV_FIELD = re.compile(r'rev\s*=\s*"[^"]*"')
 BRANCH_FIELD = re.compile(r'branch\s*=\s*"[^"]*"')
 PATCH_HEADER = re.compile(r'^\[patch\."https://github.com/[^"]+/(craft-libs|collab-craft)"\]\s*$', re.MULTILINE)
+PATH_PATCH_TABLE = re.compile(
+    r'^\[patch\."https://github.com/[^"]+/(?:craft-libs|collab-craft)"\]\n'
+    r'(?:[^\n]*\n)*?(?=^\[|\Z)',
+    re.MULTILINE,
+)
 
 
 def load_pins(path: Path | None, url: str | None) -> dict:
@@ -98,6 +103,7 @@ def rewrite_toml(text: str, crate_map: dict[str, dict]) -> str:
             return match.group(0)
         return f'[patch."{git}"]'
 
+    text = PATH_PATCH_TABLE.sub("", text)
     return PATCH_HEADER.sub(patch_header, text)
 
 
