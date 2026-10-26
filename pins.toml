@@ -18,6 +18,12 @@ branch = "quasarke"
 git = "https://github.com/wdunn001/collab-craft"
 branch = "quasarke"
 
+# Geom/pathops live on this branch until they land on quasarke. Atomic and
+# settings already do, so LaserCraft takes those from craft-libs above.
+[sources.craft-libs-geom]
+git = "https://github.com/wdunn001/craft-libs"
+branch = "shared-geometry-crates"
+
 [crates]
 craft-ui = "craft-libs"
 craft-cloud = "craft-libs"
@@ -31,8 +37,12 @@ craft-docpath = "craft-libs"
 craft-quit = "craft-libs"
 craft-runtime = "craft-libs"
 craft-suite-account = "craft-libs"
+craft-atomic = "craft-libs"
+craft-settings = "craft-libs"
 krilla = "craft-libs"
 hayro-syntax = "craft-libs"
+craft-geom = "craft-libs-geom"
+craft-pathops = "craft-libs-geom"
 craft-collab = "collab-craft"
 craft-cloud-client = "collab-craft"
 collabcraft-share = "collab-craft"

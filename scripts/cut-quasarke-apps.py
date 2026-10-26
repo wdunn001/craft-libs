@@ -27,6 +27,8 @@ ROOTS = [
     Path(r"C:\Users\willi\source\gh-soundcraft"),
     Path(r"C:\Users\willi\source\gh-vectorcraft"),
     Path(r"C:\Users\willi\source\gh-craft-launcher"),
+    Path(r"C:\Users\willi\source\lasercraft"),
+    Path(r"C:\Users\willi\source\solidcraft-quasarke"),
 ]
 PINS = Path(r"C:\Users\willi\source\gh-craft-libs-quasarke\pins.toml")
 APPLY = Path(r"C:\Users\willi\source\gh-craft-libs-quasarke\scripts\apply-craft-pins.py")
