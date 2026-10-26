@@ -34,10 +34,11 @@ def load_pins(path: Path | None, url: str | None) -> dict:
     if url:
         with urllib.request.urlopen(url, timeout=30) as resp:
             data = resp.read()
-        return tomllib.loads(data.decode("utf-8"))
+        return tomllib.loads(data.decode("utf-8") if isinstance(data, bytes) else data)
     if not path:
         raise SystemExit("pass --pins or --pins-url")
-    return tomllib.loads(path.read_bytes())
+    with path.open("rb") as fh:
+        return tomllib.load(fh)
 
 
 def source_spec(pins: dict, key: str) -> dict:
