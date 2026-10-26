@@ -170,6 +170,27 @@ pub trait CloudApp {
     /// say which happened.
     fn encode(&mut self, uid: u64, into: Destination<'_>) -> Result<Vec<u8>, String>;
 
+    /// Start turning the open document into bytes for a cloud save.
+    ///
+    /// The default runs [`CloudApp::encode`] on the calling thread and posts
+    /// [`crate::cloud::Event::Encoded`]. An application whose encode is
+    /// expensive (a developed photo export) should override this, keep an
+    /// activity-registry guard for the work, and post `Encoded` when the
+    /// bytes are ready so a frame is never blocked on the export.
+    ///
+    /// Returning `Err` aborts before any event is posted; the caller clears
+    /// [`Busy`](crate::cloud::Busy). A posted `Encoded` failure is handled by
+    /// [`pump`](crate::cloud::pump) instead.
+    fn begin_encode(&mut self, intent: crate::cloud::SaveIntent) -> Result<(), String> {
+        let dest = Destination { name: &intent.name, mime: intent.mime.as_deref() };
+        let bytes = match self.encode(intent.uid, dest) {
+            Ok(bytes) => Ok(bytes),
+            Err(detail) => Err(crate::cloud::Fault::Refused(detail)),
+        };
+        self.cloud().post(crate::cloud::Event::Encoded { intent, bytes });
+        Ok(())
+    }
+
     /// Close a document a reload replaced. Called only once the replacement is
     /// open. A read that failed leaves the user's work where it was.
     fn close(&mut self, uid: u64);
@@ -252,4 +273,19 @@ pub trait CloudApp {
     fn style(&self, ui: &Ui) -> CloudStyle {
         CloudStyle::from_visuals(ui.visuals())
     }
+
+    /// Recent documents this application knows, as paths. File › Open lists
+    /// them in the Recent place. Empty when the application has none yet.
+    fn recents(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// Open one of [`CloudApp::recents`].
+    fn open_recent(&mut self, _path: &str) {}
+
+    /// Show the system's own file dialog. File › Open's This computer place
+    /// and its Browse control both call this. Cloud folders the operating
+    /// system already knows sit in that dialog; this crate does not discover
+    /// vendor synced folders.
+    fn browse_local(&mut self) {}
 }

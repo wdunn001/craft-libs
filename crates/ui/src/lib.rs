@@ -23,6 +23,7 @@ pub mod layout;
 pub mod localized;
 pub mod menu;
 pub mod panes;
+pub mod places;
 pub mod presence;
 pub mod printing;
 #[cfg(feature = "share")]
