@@ -33,6 +33,8 @@ REPOS = [
     ("craft-common-actions", Path(r"C:\Users\willi\source\gh-craft-common-actions"), "storytold"),
     ("collab-craft", Path(r"C:\Users\willi\collab-craft"), None),
     ("lasercraft", Path(r"C:\Users\willi\source\lasercraft"), None),
+    # The quasarke worktree is the suite checkout; the main tree stays on CAM work.
+    ("solidcraft", Path(r"C:\Users\willi\source\solidcraft-quasarke"), "tangency-labs"),
     ("solidcraft", Path(r"C:\Users\willi\source\solidcraft"), "tangency-labs"),
 ]
 
