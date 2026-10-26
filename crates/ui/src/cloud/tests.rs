@@ -146,6 +146,7 @@ impl CloudBackend for Service {
                 display: "Ada Lovelace".to_owned(),
                 capabilities: vec![Capability::Files, Capability::Etags],
                 provider_linked: true,
+                git: None,
             }))),
             Job::List(path) => Some(Event::Listed { path: path.clone(), entries: Ok(vec![file("/Minutes.note"), folder("/Archive")]) }),
             Job::Read { entry, into } => Some(Event::Read { entry: entry.clone(), into: *into, bytes: Ok(b"a note".to_vec()) }),
@@ -381,7 +382,7 @@ fn what_a_person_reads_is_about_their_own_kind_of_document() {
 #[test]
 fn working_together_needs_somewhere_for_the_room_to_be_keyed_on() {
     let (mut app, jobs, ctx) = wired();
-    app.cloud.account = Some(Account { display: "Ada".to_owned(), capabilities: vec![Capability::Conversation], provider_linked: true });
+    app.cloud.account = Some(Account { display: "Ada".to_owned(), capabilities: vec![Capability::Conversation], provider_linked: true, git: None });
     assert!(can_converse(&app));
     // A document that has never been in the cloud has no handle.
     work_together(&mut app);
@@ -422,7 +423,7 @@ fn bytes_are_said_the_way_a_person_reads_them() {
 fn a_destination_is_named_after_the_account_it_belongs_to() {
     let mut app = Notebook::new();
     assert_eq!(destination_name(&app), "Cloud storage", "two entries reading the same tell nobody which account this is");
-    app.cloud.account = Some(Account { display: "Ada Lovelace".to_owned(), capabilities: Vec::new(), provider_linked: true });
+    app.cloud.account = Some(Account { display: "Ada Lovelace".to_owned(), capabilities: Vec::new(), provider_linked: true, git: None });
     assert_eq!(destination_name(&app), "Ada Lovelace");
 }
 

@@ -117,6 +117,16 @@ pub struct Account {
     pub capabilities: Vec<Capability>,
     /// Until this is true, Open and Save have nowhere to go.
     pub provider_linked: bool,
+    /// Present when files live in a git repository. Open / Save show branch,
+    /// remote, and a Sync control on the same header as the account name.
+    pub git: Option<GitView>,
+}
+
+/// Branch and remote as the Open / Save chrome should show them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GitView {
+    pub branch: String,
+    pub remote: String,
 }
 
 impl Account {

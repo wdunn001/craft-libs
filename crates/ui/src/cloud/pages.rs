@@ -27,6 +27,7 @@ enum Act {
 fn header<A: CloudApp>(app: &mut A, ui: &mut Ui) {
     let style = app.style(ui);
     let mut retry = false;
+    let mut sync = false;
     match (&app.cloud().account, &app.cloud().account_fault) {
         (_, Some(fault)) => {
             let text = fault.text(app.kind().noun);
@@ -41,6 +42,13 @@ fn header<A: CloudApp>(app: &mut A, ui: &mut Ui) {
         (Some(account), None) => {
             let line = if account.display.is_empty() { app.tr("Signed in") } else { account.display.clone() };
             dim(ui, &style, &line);
+            if let Some(git) = &account.git {
+                dim(ui, &style, &format!("{} · {}", git.branch, git.remote));
+                let label = app.tr("Sync");
+                if ui.button(label).clicked() {
+                    sync = true;
+                }
+            }
         }
         (None, None) => {
             let waiting = app.tr("Connecting to your cloud account…");
@@ -52,6 +60,10 @@ fn header<A: CloudApp>(app: &mut A, ui: &mut Ui) {
         cloud.account_fault = None;
         cloud.asked_account = false;
         start(app);
+    }
+    if sync {
+        let path = app.cloud().mine.path.clone();
+        browse(app, &path);
     }
 }
 

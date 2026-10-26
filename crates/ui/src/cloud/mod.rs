@@ -41,7 +41,7 @@ mod tests;
 mod title;
 
 pub use app::{CloudApp, CloudStyle, CopyFormat, Destination, DocumentKind};
-pub use backend::{Account, CloudBackend, Event, Fault, Job, Post};
+pub use backend::{Account, CloudBackend, Event, Fault, GitView, Job, Post};
 pub use pages::{conflict_modal, open_page, progress, save_page};
 pub use title::{destination_name, prefers_cloud, share_button, shares, who};
 
