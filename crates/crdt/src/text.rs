@@ -165,19 +165,35 @@ impl TextDoc {
     /// Returns the operations to broadcast. `pos` counts live characters; the first new element
     /// anchors after the live element at `pos - 1` (or the head), and each following element
     /// anchors after its predecessor, so the whole insertion stays contiguous.
+    ///
+    /// An exhausted id space stops the insertion where it ran out. The operations for the
+    /// characters that did get ids are returned and are correct; the rest were never added
+    /// here either, so the local text and the broadcast still agree. Reissuing an id instead
+    /// would be dropped as a duplicate delivery by every replica that already holds it, which
+    /// is divergence rather than a short insert.
     pub fn local_insert(&mut self, pos: usize, s: &str, next: &mut crate::ids::Allocator, space: u32) -> Vec<TextOp> {
         let ordered = self.ordered();
         let live: Vec<NodeId> = ordered.iter().filter(|e| !e.tombstone).map(|e| e.id).collect();
         let mut anchor = pos.checked_sub(1).and_then(|p| live.get(p)).copied();
         let mut ops = Vec::new();
         for ch in s.chars() {
-            let id = next.alloc(space);
+            let Some(id) = next.alloc(space) else {
+                break;
+            };
             let after = anchor;
             self.elems.push(Elem { id, after, ch, tombstone: false });
             ops.push(TextOp::Ins { after, id, ch });
             anchor = Some(id);
         }
         ops
+    }
+
+    /// Every element id this text holds, live or tombstoned.
+    ///
+    /// For a caller that installed a text it did not build and has to continue allocating above
+    /// what the text already carries.
+    pub fn ids(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.elems.iter().map(|e| e.id)
     }
 
     /// Local delete of a live range, returning the ops to broadcast.
