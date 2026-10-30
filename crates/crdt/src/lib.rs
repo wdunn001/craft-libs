@@ -18,6 +18,7 @@
 //! | [`merge`]    | three-way merge and per-list-type merge strategies |
 //! | [`limits`]   | every enforced bound |
 //! | [`sim`]      | N-client convergence over memory links with random delays |
+//! | [`sim_text`] | N-replica convergence for [`text`], the part that rides the live wire |
 //!
 //! Apps talk to `craft_collab::Session`. They apply [`text::TextOp`] values locally. The
 //! in-crate [`server::Server`] exists so [`sim`] can prove replicas converge; CollabCraft
@@ -32,6 +33,7 @@ pub mod merge;
 pub mod replica;
 pub mod server;
 pub mod sim;
+pub mod sim_text;
 pub mod text;
 pub mod value;
 

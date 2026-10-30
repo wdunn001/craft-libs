@@ -69,12 +69,22 @@ impl Allocator {
         }
     }
 
-    /// Allocate the next id in `space` (spec §5.1: O(1), never repeats within the space).
-    pub fn alloc(&mut self, space: u32) -> NodeId {
+    /// Allocate the next id in `space`, when the space has one left.
+    ///
+    /// O(1), and never repeats within the space (spec §5.1 P1). `None` once the space is
+    /// exhausted at 2^32 ids.
+    ///
+    /// The counter is 32 bits wide because a [`NodeId`] packs it beside the space. Masking a
+    /// wider counter down to fit kept the promise of P1 only until the first wrap, and then
+    /// quietly broke it: the next id was one this space had already issued, and
+    /// [`crate::text::TextDoc::apply`] drops a known id as a duplicate delivery. So an
+    /// exhausted space refuses instead. A caller out of ids asks the server for another space,
+    /// which is what [`Allocator::next_client_id`] is for.
+    pub fn alloc(&mut self, space: u32) -> Option<NodeId> {
         let counter = self.next.entry(space).or_insert(0);
-        let id = NodeId::compose(space, (*counter & 0xFFFF_FFFF) as u32);
+        let next = u32::try_from(*counter).ok()?;
         *counter += 1;
-        id
+        Some(NodeId::compose(space, next))
     }
 
     /// The server-side client counter that starts above every id space used in the file.
@@ -99,11 +109,23 @@ mod tests {
     #[test]
     fn never_repeats() {
         let mut a = Allocator::new();
-        let first = a.alloc(7);
-        let second = a.alloc(7);
+        let first = a.alloc(7).expect("a fresh space has ids");
+        let second = a.alloc(7).expect("a fresh space has ids");
         assert_ne!(first, second);
         assert_eq!(first.space(), 7);
         assert_eq!(second.counter(), first.counter() + 1);
+    }
+
+    /// An exhausted space refuses rather than reissuing its first id. Masking a wider counter
+    /// into the 32 bits a `NodeId` carries wrapped silently, and a reissued id is dropped as a
+    /// duplicate delivery by every replica that already holds it.
+    #[test]
+    fn an_exhausted_space_refuses() {
+        let mut a = Allocator::new();
+        a.note(NodeId::compose(4, u32::MAX));
+        assert_eq!(a.alloc(4), None);
+        // And a different space is untouched by its neighbour running out.
+        assert_eq!(a.alloc(5).map(NodeId::counter), Some(0));
     }
 
     /// Spec §5.1 P2: space-0 file ids continue working — allocation above a noted id.
@@ -111,9 +133,9 @@ mod tests {
     fn continues_above_existing() {
         let mut a = Allocator::new();
         a.note(NodeId::compose(0, 41));
-        assert_eq!(a.alloc(0).counter(), 42);
+        assert_eq!(a.alloc(0).map(NodeId::counter), Some(42));
         // Other spaces are independent.
-        assert_eq!(a.alloc(3).counter(), 0);
+        assert_eq!(a.alloc(3).map(NodeId::counter), Some(0));
     }
 
     /// Spec §5.1 P3: allocation is O(1); noted ids never move backwards.
@@ -122,7 +144,7 @@ mod tests {
         let mut a = Allocator::new();
         a.note(NodeId::compose(2, 100));
         a.note(NodeId::compose(2, 5));
-        assert_eq!(a.alloc(2).counter(), 101);
+        assert_eq!(a.alloc(2).map(NodeId::counter), Some(101));
     }
 
     /// The server grants client ids above every space used in the file.
