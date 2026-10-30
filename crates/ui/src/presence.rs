@@ -30,16 +30,31 @@ pub struct Peer {
     /// Where they are working, when the document can say. A spreadsheet knows
     /// the cell. A word processor knows the page. Shown on hover only.
     pub at: Option<String>,
+    /// A short fingerprint of this peer's key, for an application that shows
+    /// one beside a name on first contact.
+    ///
+    /// Its own field rather than something folded into `display`, because
+    /// `display` is a name and nothing else: [`Peer::initial`] draws its first
+    /// character on the badge, and a fingerprint spliced in there would put a
+    /// hex digit on the badge instead of a letter. An application that does not
+    /// show fingerprints leaves this `None` and nothing changes.
+    pub fingerprint: Option<String>,
 }
 
 impl Peer {
     pub fn new(id: impl Into<String>, display: impl Into<String>) -> Peer {
-        Peer { id: id.into(), display: display.into(), at: None }
+        Peer { id: id.into(), display: display.into(), at: None, fingerprint: None }
     }
 
     /// Where they are working, for the tooltip.
     pub fn at(mut self, at: impl Into<String>) -> Peer {
         self.at = Some(at.into());
+        self
+    }
+
+    /// A short fingerprint of this peer's key, to show beside the name.
+    pub fn fingerprint(mut self, fingerprint: impl Into<String>) -> Peer {
+        self.fingerprint = Some(fingerprint.into());
         self
     }
 
@@ -97,31 +112,33 @@ pub fn colour_for(id: &str) -> Color32 {
     slot(preferred(id))
 }
 
-/// Colours for a whole room, every one distinguishable from the others.
+/// Which slot of the wheel each peer gets, every one different from the others.
 ///
 /// Each peer prefers the slot its identifier hashes to. A peer whose slot is
-/// already taken moves to the next free one, walking the list in a fixed order
+/// already taken moves to the next free one, walking the list in a fixed order,
 /// so the answer does not depend on who connected first.
 ///
-/// A document drawing remote cursors calls this with the same identifiers and
-/// gets the same answer, which is what makes a cursor and the badge above it
-/// the same person. That holds on one screen whatever else is happening,
-/// since both calls see that client's own list.
+/// This is the assignment on its own, without deciding what a slot looks like.
+/// An application with its own palette, or with colour-vision modes to honour,
+/// wants the slot and not a colour: it maps slot to its own theme and keeps the
+/// one property that matters. A badge here and a cursor drawn somewhere else
+/// agree on the person with no state passed between them, because both resolve
+/// the same identifiers the same way.
 ///
 /// Two clients mid-transition can disagree for a frame or two. One has seen
-/// somebody join and the other has not, so the walk resolves differently
-/// until both lists match. It settles by itself, and nobody is comparing two
-/// screens while it does. The durable fix is for the relay to hand out slots
-/// with the peer list, which takes a protocol change.
+/// somebody join and the other has not, so the walk resolves differently until
+/// both lists match. It settles by itself, and nobody is comparing two screens
+/// while it does. The durable fix is for the relay to hand out slots with the
+/// peer list, which takes a protocol change.
 ///
 /// Beyond [`SLOTS`] peers the wheel repeats, since there is no seventeenth
-/// colour anybody could tell from the first sixteen.
-pub fn colours_for(ids: &[String]) -> Vec<Color32> {
+/// slot anybody could tell from the first sixteen.
+pub fn slots_for(ids: &[String]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..ids.len()).collect();
     order.sort_by(|a, b| ids[*a].cmp(&ids[*b]));
 
     let mut taken = [false; SLOTS];
-    let mut out = vec![Color32::BLACK; ids.len()];
+    let mut out = vec![0usize; ids.len()];
     for position in order {
         let want = preferred(&ids[position]);
         let mut at = want;
@@ -132,9 +149,17 @@ pub fn colours_for(ids: &[String]) -> Vec<Color32> {
             }
         }
         taken[at] = true;
-        out[position] = slot(at);
+        out[position] = at;
     }
     out
+}
+
+/// Colours for a whole room, every one distinguishable from the others.
+///
+/// [`slots_for`] with this crate's own wheel applied. An application happy with
+/// that wheel calls this and is done.
+pub fn colours_for(ids: &[String]) -> Vec<Color32> {
+    slots_for(ids).into_iter().map(slot).collect()
 }
 
 fn hsv(hue: f32, saturation: f32, value: f32) -> Color32 {
@@ -324,6 +349,45 @@ fn badge(ui: &mut Ui, text: &str, fill: Color32, ink: Color32) -> Response {
 
 #[cfg(test)]
 mod tests {
+    /// The slot assignment is the part worth sharing. An application with its own
+    /// palette, or with colour-vision modes, maps these to its own theme and still
+    /// gets a badge and a cursor that agree on the person.
+    #[test]
+    fn slots_are_distinct_and_independent_of_order() {
+        let ids: Vec<String> = ["alice", "bob", "carol", "dave"].iter().map(|s| (*s).to_owned()).collect();
+        let slots = super::slots_for(&ids);
+        let mut unique = slots.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), slots.len(), "four people in one room get four slots");
+
+        // The same room in a different order gives each identifier the same slot.
+        let shuffled: Vec<String> = ["dave", "alice", "carol", "bob"].iter().map(|s| (*s).to_owned()).collect();
+        let other = super::slots_for(&shuffled);
+        for (i, id) in ids.iter().enumerate() {
+            let j = shuffled.iter().position(|s| s == id).expect("same room");
+            assert_eq!(slots[i], other[j], "{id} keeps its slot whatever order the list arrives in");
+        }
+    }
+
+    /// And the crate's own wheel is still just those slots coloured in, so an
+    /// application that wants the default is unaffected.
+    #[test]
+    fn colours_are_the_slots_through_this_crates_wheel() {
+        let ids: Vec<String> = ["alice", "bob", "carol"].iter().map(|s| (*s).to_owned()).collect();
+        let expected: Vec<_> = super::slots_for(&ids).into_iter().map(super::slot).collect();
+        assert_eq!(super::colours_for(&ids), expected);
+    }
+
+    /// A fingerprint is its own field, so it never reaches the badge's letter.
+    #[test]
+    fn a_fingerprint_does_not_become_the_badge_letter() {
+        let peer = super::Peer::new("peer-1", "Alice").fingerprint("a1b2 c3d4");
+        assert_eq!(peer.fingerprint.as_deref(), Some("a1b2 c3d4"));
+        assert_eq!(peer.initial(), "A", "the badge still shows the name's first letter");
+        assert_eq!(super::Peer::new("peer-1", "Alice").fingerprint, None, "and it stays absent unless asked for");
+    }
+
     use super::*;
 
     #[test]
