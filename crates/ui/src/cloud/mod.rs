@@ -26,6 +26,8 @@
 //! shows them in.
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
@@ -35,6 +37,8 @@ use serde_json::{Value as Json, json};
 
 mod app;
 mod backend;
+#[cfg(test)]
+mod conflict_tests;
 mod pages;
 #[cfg(test)]
 mod tests;
@@ -44,7 +48,6 @@ pub use app::{CloudApp, CloudStyle, CopyFormat, Destination, DocumentKind};
 pub use backend::{Account, CloudBackend, Event, Fault, Job, Post};
 pub use pages::{conflict_modal, open_page, progress, save_page};
 pub use title::{destination_name, prefers_cloud, share_button, shares, who};
-// SaveIntent / SaveKind are defined below and used by Event::Encoded.
 
 /// How long to wait between asking whether the user has finished linking an
 /// account in their browser.
@@ -106,49 +109,17 @@ pub struct Origin {
 /// What the pages are waiting for. Drawn as progress while they wait.
 #[derive(Clone, Debug)]
 pub enum Busy {
-    Opening {
-        name: String,
-    },
-    /// The application is turning the open document into bytes.
-    Encoding {
-        name: String,
-    },
-    Saving {
-        name: String,
-        bytes: usize,
-    },
+    Opening { name: String },
+    Saving { name: String, bytes: usize },
 }
 
 impl Busy {
     pub fn text(&self) -> String {
         match self {
             Busy::Opening { name } => format!("Opening {name}…"),
-            Busy::Encoding { name } => format!("Preparing {name}…"),
             Busy::Saving { name, bytes } => format!("Saving {name} ({})…", size_text(Some(*bytes as u64))),
         }
     }
-}
-
-/// Where encoded bytes should go once they are ready.
-///
-/// Encode is the application's work and may leave the UI thread. The network
-/// write is a host [`Job`]. This intent bridges the two without blocking a
-/// frame on a large export.
-#[derive(Clone, Debug)]
-pub struct SaveIntent {
-    pub uid: u64,
-    /// Destination file name (and extension) the bytes must match.
-    pub name: String,
-    /// Content type when the provider said one; Save As has none yet.
-    pub mime: Option<String>,
-    pub kind: SaveKind,
-}
-
-/// Write over an existing entry, or create under a folder.
-#[derive(Clone, Debug)]
-pub enum SaveKind {
-    Write { entry: Entry },
-    Create { folder: String },
 }
 
 /// A save that was refused because the stored copy had moved on.
@@ -243,9 +214,16 @@ pub struct CloudFiles {
     /// popup from this gesture instead of inferring it from `status`, which can
     /// stay set after a failed sign-in.
     sign_in_from_menu: bool,
-    /// File › Open: which place in the rail is chosen. 1 is the cloud account
-    /// when a service is wired, which is the live site's usual case.
-    pub open_place: usize,
+    /// Bumped on sign-out and on a new sign-in. Stamped onto every [`Post`]
+    /// handed out by [`submit`] so a reply to a job issued before the bump is
+    /// dropped rather than applied to the session that replaced it.
+    account_generation: Arc<AtomicU64>,
+    /// The document Save As must act on, when it is not the active one.
+    ///
+    /// Set only by the conflict modal's "Save as a copy", so the copy it asks
+    /// for is made from the conflicted document even if the user has since
+    /// switched to another tab. Consumed by the next [`save_as`] call.
+    save_as_target: Option<u64>,
 }
 
 impl Default for CloudFiles {
@@ -276,7 +254,8 @@ impl CloudFiles {
             sharing_save: false,
             guest: None,
             sign_in_from_menu: false,
-            open_place: 1,
+            account_generation: Arc::new(AtomicU64::new(0)),
+            save_as_target: None,
         }
     }
 
@@ -333,19 +312,6 @@ impl CloudFiles {
     fn can(&self, capability: Capability) -> bool {
         self.account.as_ref().is_some_and(|a| a.can(capability))
     }
-
-    /// Push a local event onto the same channel host jobs use.
-    ///
-    /// Encode finishes here rather than in the host worker, so the application
-    /// posts [`Event::Encoded`] when the bytes are ready.
-    pub fn post(&self, event: Event) {
-        let _ = self.events.0.send(event);
-    }
-
-    /// A clone of the event sender for a worker that finishes encode later.
-    pub fn event_sender(&self) -> Sender<Event> {
-        self.events.0.clone()
-    }
 }
 
 // ---------------------------------------------------------------- asking
@@ -365,7 +331,7 @@ pub fn can_converse<A: CloudApp>(app: &A) -> bool {
 pub fn submit<A: CloudApp>(app: &A, job: Job) {
     let cloud = app.cloud();
     if let Some(backend) = &cloud.backend {
-        backend.submit(job, Post::new(cloud.events.0.clone()));
+        backend.submit(job, Post::new(cloud.events.0.clone(), cloud.account_generation.clone()));
     }
 }
 
@@ -381,20 +347,6 @@ pub fn start<A: CloudApp>(app: &mut A) {
     if !app.cloud().mine.loaded && !app.cloud().mine.loading {
         browse(app, "");
     }
-}
-
-/// Ask who is signed in again after a fault. File › Open's places rail uses this
-/// for Try again; the pages themselves set the same fields because they live here.
-pub fn retry_account<A: CloudApp>(app: &mut A) {
-    if !available(app) {
-        return;
-    }
-    {
-        let cloud = app.cloud_mut();
-        cloud.account_fault = None;
-        cloud.asked_account = false;
-    }
-    start(app);
 }
 
 /// Begins signing in to the service.
@@ -417,6 +369,12 @@ pub fn sign_in<A: CloudApp>(app: &mut A) {
     cloud.asked_account = true;
     cloud.link = None;
     cloud.status = Some(working);
+    // A new session. A job the previous one left outstanding may never
+    // answer, and if it does, that answer is not about this account: see
+    // `Post::send`. Busy goes with it, or a stuck read from before this
+    // sign-in would leave Save refused for a session that never asked for it.
+    cloud.account_generation.fetch_add(1, Ordering::Relaxed);
+    cloud.busy = None;
     submit(app, Job::SignIn);
 }
 
@@ -435,6 +393,13 @@ pub fn sign_out<A: CloudApp>(app: &mut A) {
     cloud.shared = Folder::default();
     cloud.origins.clear();
     cloud.status = Some(signed_out);
+    // The session this window had ends here. A job it started may never
+    // answer, and a reply that does arrive late must not land on whatever
+    // comes next: see `Post::send`. Busy goes with it, so an open or a save
+    // that never heard back does not refuse every one after it forever.
+    cloud.account_generation.fetch_add(1, Ordering::Relaxed);
+    cloud.busy = None;
+    cloud.save_as_target = None;
     submit(app, Job::SignOut);
 }
 
@@ -592,9 +557,9 @@ pub fn has_target<A: CloudApp>(app: &A) -> bool {
 
 /// Save: writes back over the entry this document came from.
 ///
-/// Encode may leave the UI thread ([`CloudApp::begin_encode`]). The network
-/// write starts when [`Event::Encoded`] arrives. The etag the document was
-/// read at goes out as the condition; a conflict is never retried.
+/// The etag the document was read at goes out as the condition. A server whose
+/// copy has moved on refuses the write. That arrives as [`Fault::Conflict`] and
+/// is put to the user. It is never retried.
 pub fn save<A: CloudApp>(app: &mut A) -> Result<Json, String> {
     let noun = app.kind().noun;
     let uid = app.active().ok_or(format!("no {noun} open"))?;
@@ -605,25 +570,25 @@ pub fn save<A: CloudApp>(app: &mut A) -> Result<Json, String> {
     if app.cloud().busy.is_some() {
         return Err("a cloud transfer is already running".to_owned());
     }
-    let name = origin.entry.name.clone();
-    let mime = origin.entry.mime.clone();
-    let etag = origin.entry.etag.clone();
-    let intent = SaveIntent { uid, name: name.clone(), mime, kind: SaveKind::Write { entry: origin.entry } };
+    let bytes = app.encode(uid, Destination { name: &origin.entry.name, mime: origin.entry.mime.as_deref() })?;
+    let size = bytes.len();
     let cloud = app.cloud_mut();
     cloud.status = None;
-    cloud.busy = Some(Busy::Encoding { name: name.clone() });
-    let answer = json!({"encoding": name, "ifMatch": etag});
-    if let Err(e) = app.begin_encode(intent) {
-        app.cloud_mut().busy = None;
-        return Err(e);
-    }
+    cloud.busy = Some(Busy::Saving { name: origin.entry.name.clone(), bytes: size });
+    let answer = json!({"saving": origin.entry.name, "bytes": size, "ifMatch": origin.entry.etag});
+    submit(app, Job::Write { uid, entry: origin.entry, bytes });
     Ok(answer)
 }
 
 /// Save As: writes a new document into `folder` under `name`.
+///
+/// Acts on [`CloudFiles::save_as_target`] when the conflict modal's "Save as
+/// a copy" set one, so the copy is made from the document that conflicted
+/// even if another tab is active by the time this runs. Otherwise, the
+/// active document, same as every other ordinary Save As.
 pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Json, String> {
     let kind = app.kind();
-    let uid = app.active().ok_or(format!("no {} open", kind.noun))?;
+    let uid = app.cloud_mut().save_as_target.take().or_else(|| app.active()).ok_or(format!("no {} open", kind.noun))?;
     let name = document_name(name, kind);
     if name.is_empty() {
         return Err("type a file name".to_owned());
@@ -633,15 +598,13 @@ pub fn save_as<A: CloudApp>(app: &mut A, folder: &str, name: &str) -> Result<Jso
     }
     // A document that does not exist yet has no content type to read. The
     // name a person just typed is the whole of what was asked for.
-    let intent = SaveIntent { uid, name: name.clone(), mime: None, kind: SaveKind::Create { folder: folder.to_owned() } };
+    let bytes = app.encode(uid, Destination::new(&name))?;
+    let size = bytes.len();
     let cloud = app.cloud_mut();
     cloud.status = None;
-    cloud.busy = Some(Busy::Encoding { name: name.clone() });
-    let answer = json!({"encoding": name, "folder": folder});
-    if let Err(e) = app.begin_encode(intent) {
-        app.cloud_mut().busy = None;
-        return Err(e);
-    }
+    cloud.busy = Some(Busy::Saving { name: name.clone(), bytes: size });
+    let answer = json!({"saving": name, "folder": folder, "bytes": size});
+    submit(app, Job::Create { uid, folder: folder.to_owned(), name, bytes });
     Ok(answer)
 }
 
@@ -773,23 +736,6 @@ fn apply<A: CloudApp>(app: &mut A, event: Event) {
                 }
             }
         }
-        Event::Encoded { intent, bytes } => match bytes {
-            Ok(bytes) => {
-                let size = bytes.len();
-                let name = intent.name.clone();
-                app.cloud_mut().busy = Some(Busy::Saving { name: name.clone(), bytes: size });
-                match intent.kind {
-                    SaveKind::Write { entry } => submit(app, Job::Write { uid: intent.uid, entry, bytes }),
-                    SaveKind::Create { folder } => submit(app, Job::Create { uid: intent.uid, folder, name: intent.name, bytes }),
-                }
-            }
-            Err(fault) => {
-                app.cloud_mut().busy = None;
-                app.drop_pending(intent.uid);
-                let text = format!("{} {}", app.tr(&format!("The {noun} was not saved.")), fault.text(noun));
-                app.say(text);
-            }
-        },
     }
 }
 
@@ -925,7 +871,7 @@ fn entry_row<A: CloudApp>(app: &A, ui: &mut Ui, entry: &Entry, detail: &str, res
     let width = (ui.available_width() - reserve).max(60.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 40.0), Sense::click());
     let label = entry.name.clone();
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 4.0, style.hover);

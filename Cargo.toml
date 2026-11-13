@@ -37,6 +37,7 @@ craft-cloud = { path = "crates/cloud" }
 craft-crdt = { path = "crates/crdt" }
 craft-docpath = { path = "crates/docpath" }
 craft-esign = { path = "crates/esign" }
+craft-cloud-local = { path = "crates/cloud-local" }
 craft-crs = { path = "crates/crs" }
 craft-crw = { path = "crates/crw" }
 craft-csv = { path = "crates/csv" }
