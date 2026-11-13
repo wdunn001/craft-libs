@@ -30,9 +30,9 @@ pub mod panes;
 pub mod places;
 pub mod presence;
 pub mod printing;
+pub mod shapes;
 #[cfg(feature = "share")]
 pub mod share;
-pub mod shapes;
 pub mod tabs;
 #[cfg(all(feature = "screen-testing", not(target_arch = "wasm32")))]
 pub mod testing;
