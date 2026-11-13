@@ -13,7 +13,7 @@
 //! ```text
 //! service  ai.storyteller.artcraft.suite-account
 //! user     the account handle (crate::accounts::handle: a digest of the deployment and the subject)
-//! secret   the CollabCraft session token, as returned by POST /auth/device/poll
+//! secret   a bearer token for that account, minted by whatever deployment the handle names
 //! ```
 //!
 //! On Windows that is a generic credential whose target name is

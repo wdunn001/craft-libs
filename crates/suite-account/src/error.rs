@@ -16,6 +16,18 @@ pub enum Error {
     Keychain(String),
     /// No account on file has that handle.
     Unknown(String),
+    /// A write named a generation the account has already moved past: another sign-in or removal
+    /// landed first. See RFC-0025's "Cross-app lifecycle guarantees".
+    StaleGeneration {
+        id: String,
+        expected: u32,
+        current: u32,
+    },
+    /// This handle has reached the highest generation `u32` can hold. Nothing can bump it
+    /// further. The write that would have is refused. Wrapping back to a small generation would
+    /// let a stale caller pass the check again. Reaching this needs about four billion sign-ins
+    /// or removals of the same handle.
+    GenerationExhausted(String),
 }
 
 impl std::fmt::Display for Error {
@@ -25,6 +37,13 @@ impl std::fmt::Display for Error {
             Error::Io(why) | Error::Malformed(why) => f.write_str(why),
             Error::Keychain(why) => write!(f, "the keychain refused: {why}"),
             Error::Unknown(id) => write!(f, "no account {id} is signed in"),
+            Error::StaleGeneration { id, expected, current } => {
+                write!(
+                    f,
+                    "account {id} moved from generation {expected} to {current}; this write was made against a generation that is no longer current"
+                )
+            }
+            Error::GenerationExhausted(id) => write!(f, "account {id} has reached the highest generation this build can record"),
         }
     }
 }

@@ -18,11 +18,66 @@
 //! keychain, a missing folder and an empty suite all land on "nobody is signed in". None of them is
 //! an error that stops an application starting.
 //!
-//! [`Store::sign_out`] ends the session at the deployment and then clears the keychain entry. The
-//! deployment drops every session it holds for that user. The one action therefore covers the
-//! suite.
+//! [`Store::discard`] clears the keychain entry and then the row, for a session this machine
+//! should stop holding. [`Store::forget`] clears only the keychain entry, leaving the row for a
+//! user interface to still show (and, say, offer "sign in again" on). Neither talks to the
+//! deployment: ending the session there, so every machine the person left one on drops it too, is
+//! a distinct operation that belongs to the provider adapter that knows how to ask the deployment
+//! for that, per RFC-0025's "Cross-app lifecycle guarantees" (point 4: forgetting is local,
+//! revoking is at the provider). A consumer that wants both calls its own revoke, then
+//! [`Store::discard`].
 //!
 //! An application upgrading from its own session file calls [`migrate::adopt`] once at startup.
+//!
+//! ## Concurrent mutations and partial-failure recovery
+//!
+//! Several apps run at once against one account list and one keychain (RFC-0025's "Cross-app
+//! lifecycle guarantees"). Every mutation of the accounts file ([`Store::sign_in`],
+//! [`Store::update_token`], [`Store::discard`], [`Store::set_active`], [`Store::touch`]) therefore
+//! reads, changes and writes it under one OS-level file lock ([`lock::with_lock`]), never an
+//! unlocked read-modify-write. A pure read ([`Store::accounts`], [`Store::shared`]) does not take
+//! the lock; [`accounts::write`] already replaces the file through a temporary file and a rename,
+//! so a reader never sees a half-written file, only one write older than the latest.
+//!
+//! The lock does not wrap an unconditional keychain call. A keychain write or removal happens
+//! either entirely before the lock is taken or, for [`Store::discard`], [`Store::sign_in`]'s
+//! re-check and [`Store::update_token`]'s write, inside the same lock hold as the list change it
+//! belongs with. Each of those three is conditional on the list mutation it sits beside actually
+//! going ahead, never a call made regardless. A locked section is never held across a call into
+//! the keychain that another `Store` in this process could itself be waiting on; that would
+//! deadlock two `Store`s over one folder in a single process the same way two applications would
+//! be.
+//!
+//! Each operation's ordering is chosen so a crash, or another process winning a race, leaves a
+//! state the next reader detects and repairs rather than a silent mismatch (guarantee 1):
+//!
+//! * [`Store::sign_in`] writes the keychain token first, the list second. A crash in between
+//!   leaves one keychain entry nothing on the list points at yet. Harmless: the account's handle
+//!   is a digest of the deployment and the subject, so the next sign-in for the same account
+//!   overwrites that same entry rather than minting a new one. A concurrent [`Store::discard`]
+//!   for the same handle landing in that same window is not harmless the same way: it would
+//!   delete the entry this call just wrote and then, moments later, this call would still commit
+//!   a row claiming a session that no longer has a token behind it. The lock closure therefore
+//!   re-checks the keychain just before committing the row. It writes the token again when
+//!   something else has already changed it. The row this call reports `Ok` for then always has
+//!   its token in place the moment it lands.
+//! * [`Store::discard`] removes the keychain entry and writes the list's tombstone under the same
+//!   lock hold. A crash between them leaves a row on the list with no entry behind it; `shared()`
+//!   already reads that as nobody signed in, and the next sign-in for that account tidies the row
+//!   up.
+//! * [`Store::update_token`] checks the account's generation once, unlocked, purely to reject an
+//!   already-stale caller cheaply before it ever takes the lock. The keychain write itself
+//!   happens only under the lock, in the generation re-check's own success arm, immediately
+//!   before the row commits. A sign-in, a discard, or a discard followed by a re-add can land in
+//!   the window the unlocked check left open. The re-check exists to catch exactly that, whoever
+//!   won it. Either way, this call answers [`Error::StaleGeneration`] (or [`Error::Unknown`], for
+//!   a handle never on this list at all; see "Cross-app lifecycle guarantees" point 2 and
+//!   [`accounts::Accounts::locate`]) having never touched the keychain. There is never a stale
+//!   token left in it to clean up or weigh against the winner's own. A crash between the write
+//!   and the commit, both now inside one lock hold, leaves the list one generation behind a
+//!   keychain token that is already the
+//!   newer one; the next successful `update_token` against that same, still-current generation
+//!   simply writes through it again.
 //!
 //! ```no_run
 //! # fn main() -> Result<(), craft_suite_account::Error> {
@@ -45,10 +100,10 @@
 
 pub mod accounts;
 mod error;
+mod lock;
 pub mod migrate;
 pub mod paths;
 mod secret;
-pub mod service;
 pub mod store;
 
 #[cfg(test)]
@@ -60,7 +115,6 @@ pub use accounts::{Account, Accounts};
 pub use error::Error;
 pub use migrate::Adopted;
 pub use secret::Secret;
-pub use service::{Flow, Identity, Polled, Service};
 pub use store::{KEYCHAIN_SERVICE, Keychain, Memory, TokenStore};
 
 /// What the suite store has to offer.
@@ -90,16 +144,6 @@ pub struct NewAccount {
     /// Whether cloud storage is linked. Recorded for a user interface; the deployment is the
     /// authority and is asked again on each start.
     pub linked: bool,
-}
-
-/// How a sign-out ended.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SignedOut {
-    /// The deployment ended the session and the keychain entry is gone.
-    Everywhere,
-    /// The keychain entry is gone and the deployment could not be told. The session may still be
-    /// live there. Worth saying out loud. The user asked to be signed out and half of it happened.
-    LocalOnly { why: String },
 }
 
 /// The suite's account store.
@@ -141,7 +185,11 @@ impl<S: TokenStore> Store<S> {
     }
 
     /// Whether a readable token is stored for this account handle.
+    ///
+    /// Checked against isolation first, the same as every call that reaches the keychain. An
+    /// isolated store answers [`Error::Isolated`] here too, before any keychain read.
     pub fn has_token(&self, id: &str) -> Result<bool, Error> {
+        let _ = self.dir.as_deref().ok_or(Error::Isolated)?;
         Ok(self.tokens.get(id).map_err(Error::Keychain)?.is_some())
     }
 
@@ -176,96 +224,196 @@ impl<S: TokenStore> Store<S> {
         }
     }
 
-    /// Records a sign-in: the token into the keychain, then the account onto the list.
+    /// Records a sign-in: the token into the keychain, then the account onto the list, the latter
+    /// as one locked read-change-write (see the module docs, "Concurrent mutations and
+    /// partial-failure recovery").
     ///
     /// The token goes first. A failed list write then leaves the previous state intact and one
     /// unreferenced keychain entry. The next sign-in for the same account overwrites that entry,
     /// because the handle is a digest of the deployment and the subject. Nothing fresh is minted
     /// each time. The other order would leave an account on the list with no token behind it.
+    ///
+    /// A [`Store::discard`] for this same handle can still land between that first write and the
+    /// lock below, taking the entry this call just placed with it. The lock closure re-checks the
+    /// keychain right before it commits the row. It writes the token again when something else
+    /// has already changed it. An `Ok` from this call then never reports a session with no token
+    /// behind it.
     pub fn sign_in(&self, new: &NewAccount, token: &Secret, now: i64) -> Result<Account, Error> {
         self.usable()?;
         let path = self.path().ok_or(Error::Isolated)?;
         let service = accounts::normalise(&new.service);
         let id = accounts::handle(&service, &new.user);
         self.tokens.put(&id, token).map_err(Error::Keychain)?;
-        let mut list = accounts::read(&path)?;
-        let added = list.get(&id).map_or(now, |a| a.added);
-        let account = Account {
-            id,
-            service,
-            user: new.user.clone(),
-            display: new.display.clone(),
-            email: new.email.clone(),
-            added,
-            last_used: now,
-        };
-        list.put(account.clone());
-        accounts::write(&path, &list)?;
-        Ok(account)
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            let existing = list.get(&id).cloned();
+            let added = existing.as_ref().map_or(now, |a| a.added);
+            // A fresh generation, continuing past whatever this handle last reached, whether that
+            // was an active row (a sign-in replacing it) or a tombstone (a removal, per RFC-0025
+            // lifecycle guarantee 2: generations are monotonic across removal and re-add, never
+            // restarting at 0). Either way a write made against the generation this handle held a
+            // moment ago is now stale. See [`Account::generation`].
+            let generation = match &existing {
+                Some(account) => account.generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.clone()))?,
+                None => match list.tombstone_generation(&id) {
+                    Some(generation) => generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.clone()))?,
+                    None => 0,
+                },
+            };
+            let account = Account {
+                id: id.clone(),
+                service: service.clone(),
+                user: new.user.clone(),
+                display: new.display.clone(),
+                email: new.email.clone(),
+                added,
+                last_used: now,
+                linked: new.linked,
+                generation,
+            };
+            // A discard for this handle could have run entirely in the window between the
+            // unlocked write above and this lock: it would have removed that entry on its way to
+            // the tombstone this call just read past. Putting the token again here, still inside
+            // the lock, closes that window: the row committed just below is never left pointing
+            // at a keychain entry something else already took. Skipped when nothing changed it,
+            // so the common, non-racing sign-in never pays for a second keychain write.
+            if self.tokens.get(&id).map_err(Error::Keychain)?.as_ref() != Some(token) {
+                self.tokens.put(&id, token).map_err(Error::Keychain)?;
+            }
+            list.put(account.clone());
+            accounts::write(&path, &list)?;
+            Ok(account)
+        })
+    }
+
+    /// Writes a refreshed token back, honouring the account's generation.
+    ///
+    /// Updates this account's row in place. It never changes which account is active. A refresh
+    /// runs in the background for whichever account needs one, including one the person did not
+    /// select. It must never steal the selection away from the account they actually picked.
+    /// [`Store::sign_in`] and [`Store::set_active`] are the only calls that change `active`.
+    ///
+    /// `expected_generation` is the generation the caller last read the account at. A sign-in or a
+    /// removal bumps the generation (see [`Account::generation`]); a refresh that was already in
+    /// flight when one of those landed is then refused rather than silently overwriting something
+    /// newer, per RFC-0025's "Cross-app lifecycle guarantees" (point 2: removal wins over refresh).
+    /// An account that was removed answers [`Error::StaleGeneration`] holding the tombstone's
+    /// generation, never [`Error::Unknown`] and never a silent recreation; only a handle that has
+    /// never been on this list at all is `Unknown`. See [`accounts::Accounts::locate`].
+    ///
+    /// Checked twice. The keychain is written only once, inside the lock, after the second check
+    /// passes.
+    ///
+    /// The first check, unlocked, is a fast rejection only. A caller already stale when it calls
+    /// at all never even takes the lock. It writes nothing. The second check, under the accounts
+    /// lock, is what the keychain write is actually conditioned on: `self.tokens.put` runs only
+    /// in that check's own success arm, right before the row commits, both inside the one lock
+    /// hold. A sign-in or a discard for the same handle can land in the window between the two
+    /// checks. The second check exists to catch exactly that. By the time it runs, this call
+    /// still has not touched the keychain at all. Every losing path, a newer sign-in, a discard,
+    /// a discard followed by a re-add, answers [`Error::StaleGeneration`] (or [`Error::Unknown`])
+    /// having written nothing. No stale token is ever left in the keychain for a cleanup step to
+    /// weigh against a winner's. See the module docs ("Concurrent mutations and partial-failure
+    /// recovery").
+    pub fn update_token(&self, id: &str, expected_generation: u32, token: &Secret, now: i64) -> Result<Account, Error> {
+        self.usable()?;
+        let path = self.path().ok_or(Error::Isolated)?;
+
+        match accounts::read(&path)?.locate(id) {
+            accounts::Located::Active(account) if account.generation == expected_generation => {}
+            accounts::Located::Active(account) => {
+                return Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current: account.generation });
+            }
+            accounts::Located::Tombstoned(current) => {
+                return Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current });
+            }
+            accounts::Located::Unknown => return Err(Error::Unknown(id.to_owned())),
+        }
+
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            match list.locate(id) {
+                accounts::Located::Active(account) if account.generation == expected_generation => {
+                    let mut updated = account.clone();
+                    updated.generation = updated.generation.checked_add(1).ok_or_else(|| Error::GenerationExhausted(id.to_owned()))?;
+                    updated.last_used = now;
+                    // The write and the commit are one atomic step from here on, with respect to
+                    // every other mutator. sign_in and discard both take this same lock for
+                    // their own keychain and list changes. Nothing can land between this put and
+                    // this write.
+                    self.tokens.put(id, token).map_err(Error::Keychain)?;
+                    // Not `list.put`: a refresh is maintenance, never a reason to make this the
+                    // account a person selected. See [`accounts::Accounts::refresh_in_place`].
+                    list.refresh_in_place(id, updated.clone());
+                    accounts::write(&path, &list)?;
+                    Ok(updated)
+                }
+                accounts::Located::Active(account) => {
+                    Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current: account.generation })
+                }
+                accounts::Located::Tombstoned(current) => Err(Error::StaleGeneration { id: id.to_owned(), expected: expected_generation, current }),
+                accounts::Located::Unknown => Err(Error::Unknown(id.to_owned())),
+            }
+        })
     }
 
     /// Makes an account the current one.
     pub fn set_active(&self, id: &str) -> Result<(), Error> {
         let path = self.path().ok_or(Error::Isolated)?;
-        let mut list = accounts::read(&path)?;
-        if list.get(id).is_none() {
-            return Err(Error::Unknown(id.to_owned()));
-        }
-        list.active = Some(id.to_owned());
-        accounts::write(&path, &list)
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            if list.get(id).is_none() {
+                return Err(Error::Unknown(id.to_owned()));
+            }
+            list.active = Some(id.to_owned());
+            accounts::write(&path, &list)
+        })
     }
 
     /// Records that an application used the account, for a list that can show the most recent one.
     pub fn touch(&self, id: &str, now: i64) -> Result<(), Error> {
         let path = self.path().ok_or(Error::Isolated)?;
-        let mut list = accounts::read(&path)?;
-        let Some(account) = list.accounts.iter_mut().find(|a| a.id == id) else {
-            return Err(Error::Unknown(id.to_owned()));
-        };
-        account.last_used = now;
-        accounts::write(&path, &list)
-    }
-
-    /// Ends a session everywhere: at the deployment, then here.
-    ///
-    /// The deployment is told first, while the token can still be read. It drops every session it
-    /// holds for that user. This one action therefore signs the person out of the whole suite and
-    /// of any other machine they left a session on.
-    ///
-    /// A deployment that cannot be reached does not block the local half. The user asked to be
-    /// signed out. Clearing the entry and saying the server was not told beats leaving a readable
-    /// token in the keychain.
-    pub fn sign_out(&self, service: &dyn Service, id: &str) -> Result<SignedOut, Error> {
-        let path = self.path().ok_or(Error::Isolated)?;
-        let account = accounts::read(&path)?.get(id).cloned().ok_or_else(|| Error::Unknown(id.to_owned()))?;
-        let told = match self.tokens.get(id) {
-            Ok(Some(token)) => service.revoke(&account.service, &token).err(),
-            // No token to present. There is nothing the deployment would accept. Clearing the row
-            // is the whole of the job.
-            Ok(None) => None,
-            Err(why) => Some(why),
-        };
-        self.discard(id)?;
-        Ok(match told {
-            None => SignedOut::Everywhere,
-            Some(why) => SignedOut::LocalOnly { why },
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            let Some(account) = list.accounts.iter_mut().find(|a| a.id == id) else {
+                return Err(Error::Unknown(id.to_owned()));
+            };
+            account.last_used = now;
+            accounts::write(&path, &list)
         })
     }
 
-    /// Clears an account here without telling the deployment: the keychain entry, then the row.
+    /// Clears an account here: the keychain entry and the row's tombstone, under one lock hold.
     ///
-    /// For a session the deployment has already stopped honouring. There is nothing left to revoke
-    /// and the entry should still go.
+    /// This is the local half of a sign-out only. Ending the session at the deployment, so every
+    /// machine the person left one on drops it too, is a distinct call on the provider adapter; a
+    /// consumer that wants both makes that call first, while the token can still be read, and then
+    /// calls this. See the module documentation and RFC-0025's "Cross-app lifecycle guarantees".
+    ///
+    /// The keychain removal happens inside the same lock hold as the list write, not before it: a
+    /// refresh racing this discard (see [`Store::update_token`]'s second check) must never be able
+    /// to land its own keychain write back in between this call's keychain removal and its list
+    /// write and so put the entry right back.
     pub fn discard(&self, id: &str) -> Result<(), Error> {
         let path = self.path().ok_or(Error::Isolated)?;
-        self.forget(id)?;
-        let mut list = accounts::read(&path)?;
-        list.remove(id);
-        accounts::write(&path, &list)
+        lock::with_lock(&path, || {
+            let mut list = accounts::read(&path)?;
+            if let Some(account) = list.get(id).cloned() {
+                self.tokens.remove(id).map_err(Error::Keychain)?;
+                list.remove_with_tombstone(id, account.generation)?;
+                accounts::write(&path, &list)?;
+            }
+            Ok(())
+        })
     }
 
     /// Clears the keychain entry for an account, leaving the list alone.
+    ///
+    /// Checked against isolation first. `Store::at(None, _)` keeps nothing; without this check an
+    /// isolated store could still reach into the keychain and delete another application's
+    /// shared credential on this same machine.
     pub fn forget(&self, id: &str) -> Result<(), Error> {
+        let _ = self.dir.as_deref().ok_or(Error::Isolated)?;
         self.tokens.remove(id).map_err(Error::Keychain)
     }
 }
