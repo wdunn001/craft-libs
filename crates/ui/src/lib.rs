@@ -23,6 +23,8 @@ pub mod icons;
 pub mod ime;
 pub mod layout;
 pub mod localized;
+// Used unconditionally by the cloud pages' row overflow menu (Share, Work
+// together) and by the esign dialog.
 pub mod menu;
 pub mod panes;
 pub mod places;

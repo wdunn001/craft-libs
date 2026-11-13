@@ -19,8 +19,8 @@ log = "0.4"
 serde = { version = "1", features = ["derive"], optional = true }
 # Same version as epaint's, for reading a face's character map.
 skrifa = { version = "0.44", default-features = false, features = ["std"] }
-# The vendor-neutral vocabulary the share dialog speaks. No IO and no
-# vendor, so this stays buildable for the web.
+# The vendor-neutral vocabulary the share and e-sign dialogs speak. No IO
+# and no vendor, so this stays buildable for the web.
 craft-cloud = { workspace = true, optional = true }
 craft-esign = { workspace = true, optional = true }
 # The control channel's report of the cloud state. One serialiser here
